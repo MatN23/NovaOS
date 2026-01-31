@@ -1,0 +1,66 @@
+# Nova Desktop Power Configuration
+
+[behavior]
+on_ac = "balanced"                      # Power profile when on AC
+on_battery = "balanced"                 # Power profile when on battery
+low_battery_threshold = 20              # Percentage
+critical_battery_threshold = 5          # Percentage
+critical_action = "hibernate"           # suspend, hibernate, shutdown, nothing
+
+# Power profiles
+[profiles.performance]
+cpu_governor = "performance"
+gpu_power = "high"                      # low, auto, high
+display_brightness = 100                # Percentage, -1 for no change
+disk_apm = 254                          # 1-254, higher = more performance
+usb_autosuspend = false
+
+[profiles.balanced]
+cpu_governor = "ondemand"
+gpu_power = "auto"
+display_brightness = 80
+disk_apm = 128
+usb_autosuspend = true
+usb_autosuspend_delay_ms = 2000
+
+[profiles.power_saver]
+cpu_governor = "powersave"
+gpu_power = "low"
+display_brightness = 50
+disk_apm = 64
+usb_autosuspend = true
+usb_autosuspend_delay_ms = 500
+
+[display]
+# Idle behavior on AC power
+[display.on_ac]
+dim_delay_sec = 300                     # Dim after 5 minutes
+dim_percent = 50
+screen_off_delay_sec = 600              # Screen off after 10 minutes
+lock_delay_sec = 0                      # Lock immediately when screen off
+sleep_delay_sec = -1                    # Never sleep on AC
+
+# Idle behavior on battery
+[display.on_battery]
+dim_delay_sec = 60
+dim_percent = 50
+screen_off_delay_sec = 180
+lock_delay_sec = 0
+sleep_delay_sec = 600
+
+[lid]
+on_ac = "nothing"                       # nothing, lock, suspend, hibernate
+on_battery = "suspend"
+
+[power_button]
+action = "show_dialog"                  # nothing, suspend, hibernate, shutdown, show_dialog
+
+[sleep]
+# Pre-sleep actions
+lock_before_sleep = true
+save_session = true
+
+# Wake sources
+wake_on_lid = true
+wake_on_power_button = true
+wake_on_rtc_alarm = true

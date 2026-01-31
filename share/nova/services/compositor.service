@@ -1,0 +1,32 @@
+# Nova Desktop Service Definitions
+
+[service]
+name = "NovaCompositor"
+description = "GPU-accelerated Wayland compositor"
+type = "notify"                         # simple, notify, oneshot
+
+[exec]
+command = "/usr/libexec/nova/novacompositor"
+args = []
+environment = { WAYLAND_DISPLAY = "nova-0" }
+
+[dependencies]
+requires = []                           # Hard dependencies
+wants = ["nova-configd"]                # Soft dependencies
+before = ["nova-shell"]                 # Start before these
+
+[restart]
+policy = "on-failure"                   # always, on-failure, never
+delay_ms = 1000
+max_attempts = 5
+max_attempts_interval_sec = 60
+
+[health]
+check_interval_ms = 5000
+timeout_ms = 3000
+type = "socket"                         # socket, process, http
+socket = "/var/run/nova/compositor.sock"
+
+[logging]
+stdout = "journal"                      # journal, file, null
+stderr = "journal"

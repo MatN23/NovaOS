@@ -1,0 +1,57 @@
+# Nova Desktop Input Configuration
+
+[keyboard]
+layout = "us"
+variant = ""
+model = "pc105"
+options = ""                            # e.g., "ctrl:nocaps,compose:ralt"
+repeat_delay_ms = 300
+repeat_rate = 30                        # Characters per second
+
+[pointer]
+acceleration = 0.0                      # -1.0 (slow) to 1.0 (fast)
+acceleration_profile = "adaptive"       # adaptive, flat
+natural_scroll = false
+speed = 1.0
+left_handed = false
+
+[touchpad]
+enabled = true
+tap_to_click = true
+tap_and_drag = true
+tap_and_drag_lock = false
+two_finger_scroll = true
+natural_scroll = true
+acceleration = 0.2
+scroll_factor = 1.0
+disable_while_typing = true
+middle_emulation = true                 # Two-finger tap = middle click
+click_method = "fingers"                # fingers, areas
+
+[gestures]
+enabled = true
+
+# Three-finger gestures
+three_finger_swipe_up = "overview"
+three_finger_swipe_down = "window_close"
+three_finger_swipe_left = "back"
+three_finger_swipe_right = "forward"
+
+# Four-finger gestures
+four_finger_swipe_up = "overview"
+four_finger_swipe_down = "show_desktop"
+four_finger_swipe_left = "workspace_next"
+four_finger_swipe_right = "workspace_prev"
+
+# Pinch gestures
+pinch_in = "none"
+pinch_out = "none"
+
+[tablet]
+tip_pressure_threshold = 0.02
+button_mapping = "default"
+
+[mouse]
+# Mouse-specific settings (overrides pointer for mice)
+natural_scroll = false
+acceleration_profile = "flat"

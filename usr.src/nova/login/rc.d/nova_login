@@ -1,0 +1,55 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# PROVIDE: nova_login
+# REQUIRE: LOGIN cleanvar dbus
+# KEYWORD: shutdown
+#
+# Add the following line to /etc/rc.conf to enable nova-login:
+#
+# nova_login_enable="YES"
+#
+
+. /etc/rc.subr
+
+name="nova_login"
+rcvar="nova_login_enable"
+
+load_rc_config $name
+
+: ${nova_login_enable:="NO"}
+: ${nova_login_vt:="9"}
+: ${nova_login_user:="root"}
+: ${nova_login_flags:=""}
+
+command="/usr/libexec/nova/nova-login"
+command_args="--vt ${nova_login_vt} ${nova_login_flags}"
+pidfile="/var/run/nova-login.pid"
+
+start_precmd="nova_login_prestart"
+stop_postcmd="nova_login_poststop"
+
+nova_login_prestart()
+{
+    # Create runtime directory
+    mkdir -p /var/run/nova
+    chmod 755 /var/run/nova
+    
+    # Ensure DRM devices are accessible
+    if [ ! -c /dev/dri/card0 ]; then
+        warn "No DRM device found at /dev/dri/card0"
+        return 1
+    fi
+    
+    return 0
+}
+
+nova_login_poststop()
+{
+    # Clean up any leftover sockets
+    rm -f /var/run/nova/*.sock
+    return 0
+}
+
+run_rc_command "$1"

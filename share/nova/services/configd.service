@@ -1,0 +1,30 @@
+[service]
+name = "nova-configd"
+description = "Nova Configuration Daemon"
+type = "notify"
+
+[exec]
+command = "/usr/libexec/nova/nova-configd"
+args = []
+environment = {}
+
+[dependencies]
+requires = []
+wants = []
+before = ["nova-compositor", "nova-audiod", "nova-powerd", "nova-shell"]
+
+[restart]
+policy = "always"
+delay_ms = 100
+max_attempts = 10
+max_attempts_interval_sec = 30
+
+[health]
+check_interval_ms = 5000
+timeout_ms = 1000
+type = "socket"
+socket = "/var/run/nova/configd.sock"
+
+[logging]
+stdout = "journal"
+stderr = "journal"

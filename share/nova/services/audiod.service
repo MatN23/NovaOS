@@ -1,0 +1,30 @@
+[service]
+name = "nova-audiod"
+description = "Nova Audio Daemon"
+type = "notify"
+
+[exec]
+command = "/usr/libexec/nova/nova-audiod"
+args = []
+environment = {}
+
+[dependencies]
+requires = []
+wants = ["nova-configd"]
+before = ["nova-shell"]
+
+[restart]
+policy = "on-failure"
+delay_ms = 500
+max_attempts = 5
+max_attempts_interval_sec = 60
+
+[health]
+check_interval_ms = 5000
+timeout_ms = 2000
+type = "socket"
+socket = "/var/run/nova/audiod.sock"
+
+[logging]
+stdout = "journal"
+stderr = "journal"

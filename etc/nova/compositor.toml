@@ -1,0 +1,32 @@
+# Nova Desktop Default Configuration
+# System-wide defaults - users can override in ~/.config/nova/
+
+# Display and compositor settings
+[compositor]
+vsync = true
+adaptive_sync = true                    # VRR/FreeSync when available
+max_fps = 0                             # 0 = unlimited (vsync limited)
+damage_tracking = true
+triple_buffering = false
+
+[compositor.effects]
+blur_enabled = true
+blur_radius = 24
+shadow_enabled = true
+shadow_radius = 32
+shadow_opacity = 0.4
+animations_enabled = true
+animation_speed = 1.0                   # 0.5 = slower, 2.0 = faster
+
+# Display output defaults
+# Per-output configuration is auto-generated in display.toml
+[display]
+fractional_scaling = true
+night_shift_enabled = false
+night_shift_temperature = 4500          # Kelvin
+night_shift_schedule = "sunset"         # sunset, custom, or disabled
+
+# XWayland for X11 application compatibility
+[xwayland]
+enabled = true
+hidpi_workaround = true                 # Scale X11 apps appropriately

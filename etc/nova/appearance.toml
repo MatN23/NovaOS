@@ -1,0 +1,73 @@
+# Nova Desktop Appearance Configuration
+
+[theme]
+name = "dark"                           # dark, light, auto
+accent_color = "#5e9eff"                # Primary accent color (hex)
+
+[window]
+corner_radius = 12                      # Window corner radius in pixels
+shadow_enabled = true
+shadow_radius = 32
+shadow_opacity = 0.4
+shadow_offset_x = 0
+shadow_offset_y = 8
+
+[blur]
+enabled = true
+radius = 24                             # Blur radius in pixels
+saturation = 1.2                        # Color saturation boost
+
+[animation]
+enabled = true
+speed = 1.0                             # Animation speed multiplier
+
+# Animation durations (milliseconds)
+[animation.durations]
+window_open = 200
+window_close = 150
+workspace_switch = 250
+launcher_open = 180
+notification = 200
+tooltip = 100
+
+[fonts]
+ui_family = "Inter"
+ui_size = 15
+ui_weight = 400
+
+mono_family = "JetBrains Mono"
+mono_size = 14
+
+title_family = "Inter"
+title_size = 13
+title_weight = 600
+
+[icons]
+theme = "Nova"
+size = 48                               # Default icon size
+
+# Dark theme color palette
+[colors.dark]
+bg_primary = "#1a1a1e"
+bg_secondary = "#242428"
+bg_tertiary = "#2e2e34"
+text_primary = "#f0f0f2"
+text_secondary = "#a0a0a8"
+text_muted = "#68686e"
+border = "#3a3a40"
+success = "#4caf82"
+warning = "#e8a850"
+error = "#e85050"
+
+# Light theme color palette
+[colors.light]
+bg_primary = "#f8f8fa"
+bg_secondary = "#ffffff"
+bg_tertiary = "#eeeef0"
+text_primary = "#1a1a1e"
+text_secondary = "#606068"
+text_muted = "#909098"
+border = "#d8d8dc"
+success = "#2e8b57"
+warning = "#cc7a00"
+error = "#cc3333"

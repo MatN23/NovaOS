@@ -1,0 +1,91 @@
+#!/bin/sh
+#
+# Nova devd integration hooks
+# Called by devd for hardware events
+#
+
+NOVA_NOTIFY="/usr/libexec/nova/nova-notify"
+
+case "$1" in
+    storage-attach)
+        # USB storage device attached
+        device="$2"
+        logger -t nova-devd "Storage device attached: $device"
+        $NOVA_NOTIFY --type=device --event=storage_attach --device="$device"
+        ;;
+    
+    storage-detach)
+        # USB storage device detached
+        device="$2"
+        logger -t nova-devd "Storage device detached: $device"
+        $NOVA_NOTIFY --type=device --event=storage_detach --device="$device"
+        ;;
+    
+    display-change)
+        # Monitor connected/disconnected
+        logger -t nova-devd "Display configuration changed"
+        $NOVA_NOTIFY --type=display --event=hotplug
+        ;;
+    
+    power-button)
+        # Power button pressed
+        logger -t nova-devd "Power button pressed"
+        $NOVA_NOTIFY --type=power --event=power_button
+        ;;
+    
+    lid-close)
+        # Laptop lid closed
+        logger -t nova-devd "Lid closed"
+        $NOVA_NOTIFY --type=power --event=lid_close
+        ;;
+    
+    lid-open)
+        # Laptop lid opened
+        logger -t nova-devd "Lid opened"
+        $NOVA_NOTIFY --type=power --event=lid_open
+        ;;
+    
+    ac-online)
+        # AC power connected
+        logger -t nova-devd "AC power connected"
+        $NOVA_NOTIFY --type=power --event=ac_online
+        ;;
+    
+    ac-offline)
+        # AC power disconnected
+        logger -t nova-devd "AC power disconnected"
+        $NOVA_NOTIFY --type=power --event=ac_offline
+        ;;
+    
+    battery-low)
+        # Battery low warning
+        logger -t nova-devd "Battery low"
+        $NOVA_NOTIFY --type=power --event=battery_low
+        ;;
+    
+    battery-critical)
+        # Battery critical
+        logger -t nova-devd "Battery critical"
+        $NOVA_NOTIFY --type=power --event=battery_critical
+        ;;
+    
+    audio-attach)
+        # Audio device attached
+        device="$2"
+        logger -t nova-devd "Audio device attached: $device"
+        $NOVA_NOTIFY --type=audio --event=device_attach --device="$device"
+        ;;
+    
+    audio-detach)
+        # Audio device detached
+        device="$2"
+        logger -t nova-devd "Audio device detached: $device"
+        $NOVA_NOTIFY --type=audio --event=device_detach --device="$device"
+        ;;
+    
+    *)
+        logger -t nova-devd "Unknown event: $1"
+        ;;
+esac
+
+exit 0

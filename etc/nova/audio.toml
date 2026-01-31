@@ -1,0 +1,39 @@
+# Nova Desktop Audio Configuration
+
+[general]
+default_output = "auto"                 # auto, or device ID
+default_input = "auto"
+sample_rate = 48000
+buffer_size = 256                       # Frames
+
+[behavior]
+switch_on_connect = true                # Switch to newly connected devices
+remember_volume = true                  # Remember per-device volume
+remember_routing = true                 # Remember per-app routing
+
+[notifications]
+enabled = true
+play_sound = true
+sound_volume = 0.8
+
+# Device priority (higher = preferred when connected)
+# Devices not listed here get priority 0
+[device_priority]
+"USB Headphones" = 100
+"Bluetooth Headphones" = 90
+"HDMI Audio" = 50
+"Built-in Speakers" = 10
+
+# Application-specific settings
+# [apps."app.id"]
+# output = "device_id"
+# input = "device_id"
+# volume = 0.8
+# noise_suppression = false
+# input_boost_db = 0.0
+
+[low_latency]
+# Settings for professional audio applications
+buffer_size = 64
+periods = 2
+exclusive_mode = false

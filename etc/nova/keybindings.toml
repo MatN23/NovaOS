@@ -1,0 +1,113 @@
+# Nova Desktop Keyboard Shortcuts (User Configuration)
+# ~/.config/nova/keybindings.toml
+
+# Application Launcher
+[launcher]
+open = "Super"                          # Press and release Super to open
+search = "Super+Space"                  # Alternative launcher shortcut
+
+# Window Management
+[windows]
+close = "Super+Q"
+close_alt = "Alt+F4"
+maximize = "Super+Up"
+maximize_toggle = "Super+M"
+minimize = "Super+Down"
+fullscreen = "F11"
+fullscreen_toggle = "Super+F"
+
+# Window positioning
+move_left = "Super+Left"                # Tile left half
+move_right = "Super+Right"              # Tile right half
+move_up = "Super+Shift+Up"              # Tile top half
+move_down = "Super+Shift+Down"          # Tile bottom half
+center = "Super+C"                      # Center window
+
+# Quarter tiling
+tile_top_left = "Super+U"
+tile_top_right = "Super+I"
+tile_bottom_left = "Super+J"
+tile_bottom_right = "Super+K"
+
+# Window switching
+switch = "Alt+Tab"
+switch_reverse = "Alt+Shift+Tab"
+switch_windows = "Super+Tab"            # Switch between all windows
+switch_windows_reverse = "Super+Shift+Tab"
+
+# Workspaces
+[workspaces]
+overview = "Super+A"                    # Show workspace overview
+show_desktop = "Super+D"
+
+# Direct workspace access
+workspace_1 = "Super+1"
+workspace_2 = "Super+2"
+workspace_3 = "Super+3"
+workspace_4 = "Super+4"
+workspace_5 = "Super+5"
+workspace_6 = "Super+6"
+workspace_7 = "Super+7"
+workspace_8 = "Super+8"
+workspace_9 = "Super+9"
+
+# Workspace navigation
+next = "Super+Ctrl+Right"
+previous = "Super+Ctrl+Left"
+move_window_next = "Super+Shift+Right"
+move_window_previous = "Super+Shift+Left"
+
+# Move window to specific workspace
+move_to_workspace_1 = "Super+Shift+1"
+move_to_workspace_2 = "Super+Shift+2"
+move_to_workspace_3 = "Super+Shift+3"
+move_to_workspace_4 = "Super+Shift+4"
+
+# System
+[system]
+lock = "Super+L"
+logout = "Super+Shift+E"
+settings = "Super+Comma"
+power_menu = "Super+Escape"
+
+# Screenshots
+screenshot = "Print"
+screenshot_window = "Alt+Print"
+screenshot_area = "Shift+Print"
+screenshot_area_clipboard = "Ctrl+Shift+Print"
+
+# Quick toggles
+quick_settings = "Super+S"
+notifications = "Super+N"
+
+# Applications
+[applications]
+terminal = "Super+Return"
+terminal_alt = "Super+T"
+file_manager = "Super+E"
+browser = "Super+B"
+
+# Audio
+[audio]
+volume_up = "XF86AudioRaiseVolume"
+volume_down = "XF86AudioLowerVolume"
+mute = "XF86AudioMute"
+mic_mute = "XF86AudioMicMute"
+
+# Media
+play_pause = "XF86AudioPlay"
+next_track = "XF86AudioNext"
+prev_track = "XF86AudioPrev"
+stop = "XF86AudioStop"
+
+# Brightness
+[brightness]
+up = "XF86MonBrightnessUp"
+down = "XF86MonBrightnessDown"
+
+# Accessibility
+[accessibility]
+zoom_in = "Super+Equal"
+zoom_out = "Super+Minus"
+zoom_reset = "Super+0"
+high_contrast = "Super+H"
