@@ -32,6 +32,9 @@
 #ifndef _NET_ROUTE_H_
 #define _NET_ROUTE_H_
 
+#ifdef _KERNEL
+#include <sys/_eventhandler.h>
+#endif
 #include <net/vnet.h>
 
 /*
@@ -87,7 +90,8 @@ struct rt_metrics {
 	u_long	rmx_pksent;	/* packets sent using this route */
 	u_long	rmx_weight;	/* route weight */
 	u_long	rmx_nhidx;	/* route nexhop index */
-	u_long	rmx_filler[2];	/* will be used for T/TCP later */
+	u_long	rmx_metric;	/* route metric */
+	u_long	rmx_filler[1];
 };
 
 /*
@@ -100,7 +104,8 @@ struct rt_metrics {
 
 /* default route weight */
 #define	RT_DEFAULT_WEIGHT	1
-#define	RT_MAX_WEIGHT		16777215	/* 3 bytes */
+#define	RT_DEFAULT_METRIC	1
+#define	RT_WILDCARD_METRIC	0
 
 /*
  * Keep a generation count of routing table, incremented on route addition,
@@ -124,32 +129,18 @@ VNET_DECLARE(u_int, rt_add_addr_allfibs); /* Announce interfaces to all fibs */
 #define	V_fib_hash_outbound	VNET(fib_hash_outbound)
 VNET_DECLARE(u_int, fib_hash_outbound);
 
+typedef void (*rtnumfibs_change_t)(void *, uint32_t);
+EVENTHANDLER_DECLARE(rtnumfibs_change, rtnumfibs_change_t);
+
 /* Outbound flowid generation rules */
 #ifdef RSS
-
 #define fib4_calc_packet_hash		xps_proto_software_hash_v4
 #define fib6_calc_packet_hash		xps_proto_software_hash_v6
 #define	CALC_FLOWID_OUTBOUND_SENDTO	true
-
-#ifdef ROUTE_MPATH
-#define	CALC_FLOWID_OUTBOUND		V_fib_hash_outbound
-#else
-#define	CALC_FLOWID_OUTBOUND		false
-#endif
-
 #else /* !RSS */
-
 #define fib4_calc_packet_hash		fib4_calc_software_hash
 #define fib6_calc_packet_hash		fib6_calc_software_hash
-
-#ifdef ROUTE_MPATH
 #define	CALC_FLOWID_OUTBOUND_SENDTO	V_fib_hash_outbound
-#define	CALC_FLOWID_OUTBOUND		V_fib_hash_outbound
-#else
-#define	CALC_FLOWID_OUTBOUND_SENDTO	false
-#define	CALC_FLOWID_OUTBOUND		false
-#endif
-
 #endif /* RSS */
 
 
@@ -311,6 +302,7 @@ struct rt_msghdr {
 #define RTV_RTT		0x40	/* init or lock _rtt */
 #define RTV_RTTVAR	0x80	/* init or lock _rttvar */
 #define RTV_WEIGHT	0x100	/* init or lock _weight */
+#define RTV_METRIC	0x200	/* init or lock _metric */
 
 #ifndef NETLINK_COMPAT
 

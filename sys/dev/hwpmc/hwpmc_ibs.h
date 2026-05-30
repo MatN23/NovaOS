@@ -1,8 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2026, Ali Jose Mashtizadeh
- * All rights reserved.
+ * Copyright (c) 2026, Netflix, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -46,11 +45,11 @@
 #define	CPUID_IBSID_BRNTRGT		0x00000020 /* Branch Target Address */
 #define	CPUID_IBSID_OPCNTEXT		0x00000040 /* Extend Counter */
 #define	CPUID_IBSID_RIPINVALIDCHK	0x00000080 /* Invalid RIP Indication */
-#define	CPUID_IBSID_OPFUSE		0x00000010 /* Fused Branch Operation */
-#define	CPUID_IBSID_IBSFETCHCTLEXTD	0x00000020 /* IBS Fetch Control Ext */
-#define	CPUID_IBSID_IBSOPDATA4		0x00000040 /* IBS OP DATA4 */
-#define	CPUID_IBSID_ZEN4IBSEXTENSIONS	0x00000080 /* IBS Zen 4 Extensions */
-#define	CPUID_IBSID_IBSLOADLATENCYFILT	0x00000100 /* Load Latency Filtering */
+#define	CPUID_IBSID_OPFUSE		0x00000100 /* Fused Branch Operation */
+#define	CPUID_IBSID_IBSFETCHCTLEXTD	0x00000200 /* IBS Fetch Control Ext */
+#define	CPUID_IBSID_IBSOPDATA4		0x00000400 /* IBS OP DATA4 */
+#define	CPUID_IBSID_ZEN4IBSEXTENSIONS	0x00000800 /* IBS Zen 4 Extensions */
+#define	CPUID_IBSID_IBSLOADLATENCYFILT	0x00001000 /* Load Latency Filtering */
 #define	CPUID_IBSID_IBSUPDTDDTLBSTATS	0x00080000 /* Simplified DTLB Stats */
 
 /*
@@ -67,6 +66,19 @@
 #define IBS_CTL_LVTOFFSETVALID		(1ULL << 8)
 #define IBS_CTL_LVTOFFSETMASK		0x0000000F
 
+/*
+ * The minimum sampling rate was selected to match the default used by other
+ * counters that was also found to be experimentally stable by providing enough
+ * time between consecutive NMIs.  The maximum sample rate is determined by
+ * setting all available counter bits, i.e., all available bits except the
+ * bottom four that are zero extended.
+ */
+#define IBS_FETCH_MIN_RATE		65536
+#define IBS_FETCH_MAX_RATE		1048560
+#define IBS_OP_MIN_RATE			65536
+#define IBS_OP_MAX_RATE			134217712
+#define IBS_OP_MAX_RATE_PREEXT		1048560
+
 /* IBS Fetch Control */
 #define IBS_FETCH_CTL			0xC0011030 /* IBS Fetch Control */
 #define IBS_FETCH_CTL_L3MISS		(1ULL << 61) /* L3 Cache Miss */
@@ -81,8 +93,15 @@
 #define IBS_FETCH_CTL_VALID		(1ULL << 49) /* Valid */
 #define IBS_FETCH_CTL_ENABLE		(1ULL << 48) /* Enable */
 #define IBS_FETCH_CTL_MAXCNTMASK	0x0000FFFFULL
+#define IBS_FETCH_CTL_CURCNTMASK	0xFFFF0000ULL
 
-#define IBS_FETCH_CTL_TO_LAT(_c)	((_c >> 32) & 0x0000FFFF)
+#define IBS_FETCH_INTERVAL_TO_CTL(_c)	(((_c) >> 4) & 0x0000FFFF)
+#define IBS_FETCH_CTL_TO_INTERVAL(_c)	(((_c) & IBS_FETCH_CTL_MAXCNTMASK) << 4)
+#define IBS_FETCH_CTL_TO_LAT(_c)	(((_c) >> 32) & 0x0000FFFF)
+#define IBS_FETCH_COUNT_TO_CTL(_c)	(((_c) << 12) & IBS_FETCH_CTL_CURCNTMASK)
+#define IBS_FETCH_CTL_TO_COUNT(_c)	(((_c) & IBS_FETCH_CTL_CURCNTMASK) >> 12)
+#define IBS_FETCH_ALLOWED_MASK_BASE	(IBS_FETCH_CTL_MAXCNTMASK | \
+    IBS_FETCH_CTL_RANDOMIZE)
 
 #define IBS_FETCH_LINADDR		0xC0011031 /* Fetch Linear Address */
 #define IBS_FETCH_PHYSADDR		0xC0011032 /* Fetch Physical Address */
@@ -92,14 +111,33 @@
 #define PMC_MPIDX_FETCH_EXTCTL		1
 #define PMC_MPIDX_FETCH_LINADDR		2
 #define PMC_MPIDX_FETCH_PHYSADDR	3
+#define PMC_MPIDX_FETCH_MAX		(PMC_MPIDX_FETCH_PHYSADDR + 1)
 
 /* IBS Execution Control */
 #define IBS_OP_CTL			0xC0011033 /* IBS Execution Control */
+#define IBS_OP_CTL_LATFLTEN		(1ULL << 63) /* Load Latency Filtering */
 #define IBS_OP_CTL_COUNTERCONTROL	(1ULL << 19) /* Counter Control */
 #define IBS_OP_CTL_VALID		(1ULL << 18) /* Valid */
 #define IBS_OP_CTL_ENABLE		(1ULL << 17) /* Enable */
 #define IBS_OP_CTL_L3MISSONLY		(1ULL << 16) /* L3 Miss Filtering */
-#define IBS_OP_CTL_MAXCNTMASK		0x0000FFFFULL
+#define IBS_OP_CTL_MAXCNTMASK		0x07F0FFFFULL /* Max Count */
+#define IBS_OP_CTL_MAXCNTEXTMASK	0x07F00000ULL /* Max Count Extended */
+#define IBS_OP_CTL_MAXCNTBASEMASK	(IBS_OP_CTL_MAXCNTMASK & \
+    ~IBS_OP_CTL_MAXCNTEXTMASK) /* Max Count Base */
+#define IBS_OP_CTL_CURCNTMASK		0x07FFFFFF00000000ULL
+#define IBS_OP_CTL_LDLATTRSHMASK	(0xFULL << 59) /* Load Lat Threshold */
+#define IBS_OP_CTL_LDLATMASK		(IBS_OP_CTL_LATFLTEN | \
+    IBS_OP_CTL_LDLATTRSHMASK) /* Load Lat Combined */
+
+#define IBS_OP_CTL_LDLAT_TO_CTL(_c)	(((((_c) >> 7) - 1) & 0xFULL) << 59)
+#define IBS_OP_INTERVAL_TO_CTL(_c)					\
+	((((_c) >> 4) & IBS_OP_CTL_MAXCNTBASEMASK) |			\
+	((_c) & IBS_OP_CTL_MAXCNTEXTMASK))
+#define IBS_OP_CTL_TO_INTERVAL(_c)					\
+	((((_c) & IBS_OP_CTL_MAXCNTBASEMASK) << 4) |			\
+	((_c) & IBS_OP_CTL_MAXCNTEXTMASK))
+#define IBS_OP_COUNT_TO_CTL(_c)		(((_c) << 32) & IBS_OP_CTL_CURCNTMASK)
+#define IBS_OP_CTL_TO_COUNT(_c)		(((_c) & IBS_OP_CTL_CURCNTMASK) >> 32)
 
 #define IBS_OP_RIP			0xC0011034 /* IBS Op RIP */
 #define IBS_OP_DATA			0xC0011035 /* IBS Op Data */
@@ -127,7 +165,7 @@
 
 #define IBS_OP_DC_LINADDR		0xC0011038 /* IBS DC Linear Address */
 #define IBS_OP_DC_PHYSADDR		0xC0011039 /* IBS DC Physical Address */
-#define IBS_TGT_RIP			0xC001103B /* IBS Branch Target */
+#define IBS_OP_TGT_RIP			0xC001103B /* IBS Branch Target */
 #define IBS_OP_DATA4			0xC001103D /* IBS Op Data 4 */
 #define IBS_OP_DATA4_LDRESYNC		(1ULL << 0)  /* Load Resync */
 
@@ -140,6 +178,7 @@
 #define PMC_MPIDX_OP_DC_PHYSADDR	6
 #define PMC_MPIDX_OP_TGT_RIP		7
 #define PMC_MPIDX_OP_DATA4		8
+#define PMC_MPIDX_OP_MAX		(PMC_MPIDX_OP_DATA4 + 1)
 
 /*
  * IBS data is encoded as using the multipart flag in the existing callchain

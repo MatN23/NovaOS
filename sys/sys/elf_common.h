@@ -448,6 +448,7 @@ typedef struct {
 #define	SHT_GROUP		17	/* Section group. */
 #define	SHT_SYMTAB_SHNDX	18	/* Section indexes (see SHN_XINDEX). */
 #define	SHT_LOOS		0x60000000	/* First of OS specific semantics */
+#define	SHT_LLVM_ADDRSIG	0x6fff4c03	/* Address significance table */
 #define	SHT_LOSUNW		0x6ffffff4
 #define	SHT_SUNW_dof		0x6ffffff4
 #define	SHT_SUNW_cap		0x6ffffff5
@@ -640,7 +641,10 @@ typedef struct {
 				   pre-initialization functions. */
 #define	DT_PREINIT_ARRAYSZ 33	/* Size in bytes of the array of
 				   pre-initialization functions. */
-#define	DT_MAXPOSTAGS	34	/* number of positive tags */
+#define	DT_SYMTAB_SHNDX	34	/* Address of the SHT_SYMTAB_SHNDX section
+				   associated with the symbol table referenced
+				   by the DT_SYMTAB element. */
+#define	DT_MAXPOSTAGS	34	/* (obsolete) number of positive tags */
 #define	DT_RELRSZ	35	/* Total size of ElfNN_Relr relocations. */
 #define	DT_RELR		36	/* Address of ElfNN_Relr relocations. */
 #define	DT_RELRENT	37	/* Size of each ElfNN_Relr relocation. */

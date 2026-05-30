@@ -597,6 +597,15 @@ find_currdev(bool do_bootmgr, char *boot_info, size_t boot_info_sz)
 		} /* Nothing specified, try normal match */
 	}
 
+#ifdef MD_IMAGE_SIZE
+	/*
+	 * If there is an embedded MD, try to use that.
+	 */
+	printf("Trying MD\n");
+	if (probe_md_currdev())
+		return (0);
+#endif /* MD_IMAGE_SIZE */
+
 #ifdef EFI_ZFS_BOOT
 	zfsinfo_list_t *zfsinfo = efizfs_get_zfsinfo_list();
 	zfsinfo_t *zi;
@@ -615,15 +624,6 @@ find_currdev(bool do_bootmgr, char *boot_info, size_t boot_info_sz)
 			return (0);
 	}
 #endif /* EFI_ZFS_BOOT */
-
-#ifdef MD_IMAGE_SIZE
-	/*
-	 * If there is an embedded MD, try to use that.
-	 */
-	printf("Trying MD\n");
-	if (probe_md_currdev())
-		return (0);
-#endif /* MD_IMAGE_SIZE */
 
 	/*
 	 * Try to find the block device by its handle based on the
@@ -1007,10 +1007,10 @@ parse_uefi_con_out(void)
 		 * If we don't have any Con* variable use both. If we have GOP
 		 * make video primary, otherwise set serial primary. In either
 		 * case, try to use both the 'efi' console which will use the
-		 * GOP, if present and serial. If there's an EFI BIOS that omits
-		 * this, but has a serial port redirect, we'll unavioidably get
-		 * doubled characters, but we'll be right in all the other more
-		 * common cases.
+		 * GOP, if present and serial. If there's a UEFI firmware that
+		 * omit this, but has a serial port redirect, we'll unavoidably
+		 * get doubled characters, but we'll be right in all the other
+		 * more common cases.
 		 */
 		if (efi_has_gop())
 			how |= RB_MULTIPLE;
@@ -1241,6 +1241,11 @@ main(int argc, CHAR16 *argv[])
 
 	/* Report the RSDP early. */
 	acpi_detect();
+
+#ifdef LOADER_VERIEXEC
+	/* tell boot_setenv to be careful */
+	set_check_restricted(true);
+#endif
 
 	/*
 	 * Chicken-and-egg problem; we want to have console output early, but

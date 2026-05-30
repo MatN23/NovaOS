@@ -40,6 +40,7 @@
 #include <sys/pmc.h>
 #include <sys/pmckern.h>
 #include <sys/smp.h>
+#include <sys/sysctl.h>
 #include <sys/systm.h>
 
 #include <machine/cpu.h>
@@ -60,8 +61,8 @@ struct amd_descr {
 };
 
 static int amd_npmcs;
+static int amd_core_npmcs, amd_l3_npmcs, amd_df_npmcs;
 static struct amd_descr amd_pmcdesc[AMD_NPMCS_MAX];
-
 struct amd_event_code_map {
 	enum pmc_event	pe_ev;	 /* enum value */
 	uint16_t	pe_code; /* encoded event mask */
@@ -177,6 +178,63 @@ struct amd_cpu {
 	struct pmc_hw	pc_amdpmcs[AMD_NPMCS_MAX];
 };
 static struct amd_cpu **amd_pcpu;
+
+/* Populated by amd_init_policy(); PRECISERETIRE is OR-ed in per-allocation. */
+static uint64_t amd_core_allowed_mask;
+static uint64_t amd_l3_allowed_mask;
+static uint64_t amd_df_allowed_mask;
+
+static uint64_t amd_core_extra_mask;
+static uint64_t amd_l3_extra_mask;
+static uint64_t amd_df_extra_mask;
+
+SYSCTL_DECL(_kern_hwpmc);
+
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, amd_core_extra_mask, CTLFLAG_RDTUN,
+    &amd_core_extra_mask, 0,
+    "Extra allowed bits in AMD core PMU PERFEVTSEL (override; default 0)");
+
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, amd_l3_extra_mask, CTLFLAG_RDTUN,
+    &amd_l3_extra_mask, 0,
+    "Extra allowed bits in AMD L3 PMU control (override; default 0)");
+
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, amd_df_extra_mask, CTLFLAG_RDTUN,
+    &amd_df_extra_mask, 0,
+    "Extra allowed bits in AMD DF PMU control (override; default 0)");
+
+static void
+amd_init_policy(void)
+{
+	int family;
+
+	family = CPUID_TO_FAMILY(cpu_id);
+
+	amd_core_allowed_mask = AMD_VALID_BITS;
+
+	amd_l3_allowed_mask = (family <= 0x17) ?
+	    AMD_PMC_L3_FAMILY17_MASK : AMD_PMC_L3_FAMILY19_MASK;
+
+	amd_df_allowed_mask = (family <= 0x19) ?
+	    AMD_PMC_DF_FAMILY17_MASK : AMD_PMC_DF_FAMILY1A_MASK;
+}
+
+static uint64_t
+amd_config_mask(enum sub_class subclass, uint64_t caps)
+{
+
+	switch (subclass) {
+	case PMC_AMD_SUB_CLASS_CORE:
+		return (amd_core_allowed_mask | amd_core_extra_mask |
+		    (((caps & PMC_CAP_PRECISE) != 0) ?
+		    AMD_PMC_PRECISERETIRE : 0));
+	case PMC_AMD_SUB_CLASS_L3_CACHE:
+		return (amd_l3_allowed_mask | amd_l3_extra_mask);
+	case PMC_AMD_SUB_CLASS_DATA_FABRIC:
+		return (amd_df_allowed_mask | amd_df_extra_mask);
+	default:
+		return (0);
+	}
+}
 
 /*
  * Read a PMC value from the MSR.
@@ -358,9 +416,13 @@ amd_allocate_pmc(int cpu __unused, int ri, struct pmc *pm,
 		return (EINVAL);
 
 	if (strlen(pmc_cpuid) != 0) {
-		pm->pm_md.pm_amd.pm_amd_evsel = a->pm_md.pm_amd.pm_amd_config;
-		PMCDBG2(MDP, ALL, 2,"amd-allocate ri=%d -> config=0x%x", ri,
-		    a->pm_md.pm_amd.pm_amd_config);
+		config = a->pm_md.pm_amd.pm_amd_config;
+		if ((config & ~amd_config_mask(amd_pmcdesc[ri].pm_subclass,
+		    caps)) != 0)
+			return (EINVAL);
+		pm->pm_md.pm_amd.pm_amd_evsel = config;
+		PMCDBG2(MDP, ALL, 2, "amd-allocate ri=%d -> config=0x%jx",
+		    ri, (uintmax_t)config);
 		return (0);
 	}
 
@@ -664,10 +726,55 @@ amd_describe(int cpu, int ri, struct pmc_info *pi, struct pmc **ppmc)
 static int
 amd_get_msr(int ri, uint32_t *msr)
 {
+	int df_idx;
+
 	KASSERT(ri >= 0 && ri < amd_npmcs,
 	    ("[amd,%d] ri %d out of range", __LINE__, ri));
 
-	*msr = amd_pmcdesc[ri].pm_perfctr - AMD_PMC_PERFCTR_0;
+	/*
+	 * Map counter row index to RDPMC ECX value.
+	 *
+	 * AMD BKDG 24594 rev 3.37, page 440,
+	 * "RDPMC Read Performance-Monitoring Counter":
+	 *   ECX 0-5:   Core counters 0-5
+	 *   ECX 6-9:   DF/Northbridge counters 0-3
+	 *   ECX 10-15: L3 Cache counters 0-5
+	 *   ECX 16-27: DF/Northbridge counters 4-15
+	 *
+	 * AMD PPR 57930-A0 section 2.1.9,
+	 * "Register Sharing" for DF counter details.
+	 */
+	if (ri < amd_core_npmcs) {
+		/* ECX 0-5: Core counters */
+		*msr = ri;
+	} else if (ri < amd_core_npmcs + amd_l3_npmcs) {
+		/* ECX 10-15: L3 Cache counters */
+		*msr = 10 + (ri - amd_core_npmcs);
+	} else {
+		/* ECX 6-9: DF counters 0-3
+		 * ECX 16-27: DF counters 4-15 */
+		df_idx = ri - amd_core_npmcs - amd_l3_npmcs;
+		if (df_idx < 4)
+			*msr = 6 + df_idx;
+		else if (df_idx < 16)
+			*msr = 16 + (df_idx - 4);
+		else
+			return (EINVAL);
+	}
+	return (0);
+}
+
+/*
+ * Return the capabilities of the given PMC.
+ */
+static int
+amd_get_caps(int ri, uint32_t *caps)
+{
+	KASSERT(ri >= 0 && ri < amd_npmcs,
+	    ("[amd,%d] ri %d out of range", __LINE__, ri));
+
+	*caps = amd_pmcdesc[ri].pm_descr.pd_caps;
+
 	return (0);
 }
 
@@ -767,7 +874,6 @@ pmc_amd_initialize(void)
 	enum pmc_cputype cputype;
 	int error, i, ncpus, nclasses;
 	int family, model, stepping;
-	int amd_core_npmcs, amd_l3_npmcs, amd_df_npmcs;
 	struct amd_descr *d;
 
 	/*
@@ -928,6 +1034,7 @@ pmc_amd_initialize(void)
 	pcd->pcd_start_pmc	= amd_start_pmc;
 	pcd->pcd_stop_pmc	= amd_stop_pmc;
 	pcd->pcd_write_pmc	= amd_write_pmc;
+	pcd->pcd_get_caps	= amd_get_caps;
 
 	pmc_mdep->pmd_cputype	= cputype;
 	pmc_mdep->pmd_intr	= amd_intr;
@@ -935,6 +1042,8 @@ pmc_amd_initialize(void)
 	pmc_mdep->pmd_switch_out = amd_switch_out;
 
 	pmc_mdep->pmd_npmc	+= amd_npmcs;
+
+	amd_init_policy();
 
 	PMCDBG0(MDP, INI, 0, "amd-initialize");
 

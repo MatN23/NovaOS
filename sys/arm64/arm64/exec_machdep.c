@@ -445,6 +445,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 	else
 		new_tcr = 0;
 	td->td_proc->p_md.md_tcr = new_tcr;
+	td->td_md.md_sctlr = 0;
 
 	/* TODO: should create a pmap function for this... */
 	tcr = READ_SPECIALREG(tcr_el1);
@@ -470,6 +471,7 @@ exec_setregs(struct thread *td, struct image_params *imgp, uintptr_t stack)
 
 	/* Generate new pointer authentication keys */
 	ptrauth_exec(td);
+	mte_exec(td);
 }
 
 /* Sanity check these are the same size, they will be memcpy'd to and from */

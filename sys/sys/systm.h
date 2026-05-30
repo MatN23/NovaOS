@@ -127,12 +127,10 @@ extern int unmapped_buf_allowed;
  * General function declarations.
  */
 
-struct inpcb;
 struct lock_object;
 struct malloc_type;
 struct mtx;
 struct proc;
-struct socket;
 struct thread;
 struct tty;
 struct ucred;
@@ -399,14 +397,6 @@ void	cpu_et_frequency(struct eventtimer *et, uint64_t newfreq);
 extern int	cpu_disable_c2_sleep;
 extern int	cpu_disable_c3_sleep;
 
-extern void	(*tcp_hpts_softclock)(void);
-extern volatile uint32_t __read_frequently hpts_that_need_softclock;
-
-#define	tcp_hpts_softclock()	do {					\
-		if (hpts_that_need_softclock > 0)			\
-			tcp_hpts_softclock();				\
-} while (0)
-
 char	*kern_getenv(const char *name);
 void	freeenv(char *env);
 int	getenv_int(const char *name, int *data);
@@ -562,6 +552,14 @@ alloc_unr64(struct unrhdr64 *unr64)
 void	intr_prof_stack_use(struct thread *td, struct trapframe *frame);
 
 void counted_warning(unsigned *counter, const char *msg);
+
+/*
+ * Safely read one byte of kernel memory at address addr, placing the
+ * value into *valp.  Returns 0 on success, EFAULT if read was
+ * impossible, e.g. due to the address not being mapped or not having
+ * necessary permissions.
+ */
+int safe_read(vm_offset_t addr, char *valp);
 
 /*
  * APIs to manage deprecation and obsolescence.

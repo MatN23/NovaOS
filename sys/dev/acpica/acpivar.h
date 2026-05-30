@@ -279,9 +279,9 @@ extern int	acpi_override_isa_irq_polarity;
  */
 enum {
 	ACPI_IVAR_PRIVATE = 20,
-	ACPI_IVAR_FLAGS,
 	ACPI_IVAR_DOMAIN,
-	ACPI_IVAR_HANDLE = BUS_IVARS_ACPI
+	ACPI_IVAR_HANDLE = BUS_IVARS_ACPI,
+	ACPI_IVAR_FLAGS
 };
 
 /*
@@ -507,6 +507,8 @@ acpi_d_state_to_str(int state)
     const char *strs[ACPI_D_STATE_COUNT] = {"D0", "D1", "D2", "D3hot",
 	"D3cold"};
 
+    if (state == ACPI_STATE_UNKNOWN)
+	return ("unknown D-state");
     MPASS(state >= ACPI_STATE_D0 && state <= ACPI_D_STATES_MAX);
     return (strs[state]);
 }

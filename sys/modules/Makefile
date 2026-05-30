@@ -169,6 +169,7 @@ SUBDIR=	\
 	if_tuntap \
 	if_vlan \
 	if_vxlan \
+	if_geneve \
 	${_if_wg} \
 	iflib \
 	${_igc} \
@@ -214,7 +215,6 @@ SUBDIR=	\
 	khelp \
 	krpc \
 	ksyms \
-	le \
 	lge \
 	libalias \
 	libiconv \
@@ -357,7 +357,7 @@ SUBDIR=	\
 	${_rtw89} \
 	rtwn \
 	rtwn_pci \
-	rtwn_usb \
+	${_rtwn_usb} \
 	${_rtwnfw} \
 	${_s3} \
 	${_safe} \
@@ -412,7 +412,7 @@ SUBDIR=	\
 	${_ufshci} \
 	uinput \
 	unionfs \
-	usb \
+	${_usb} \
 	${_vesa} \
 	${_vf_i2c} \
 	virtio \
@@ -711,6 +711,14 @@ SUBDIR+=	ktest
 SUBDIR+=	tests
 .endif
 
+.if ${MK_USB} != "no" || defined(ALL_MODULES)
+_rtwn_usb=	rtwn_usb
+_usb=		usb
+. if ${MACHINE_CPUARCH} == "amd64"
+_thunderbolt=	thunderbolt
+. endif
+.endif
+
 .if ${MK_ZFS} != "no" || defined(ALL_MODULES)
 SUBDIR+=	zfs
 .endif
@@ -830,6 +838,7 @@ _nfe=		nfe
 _nvram=		nvram
 .if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
 _padlock=	padlock
+_padlock_rng=	padlock_rng
 _rdrand_rng=	rdrand_rng
 _rdseed_rng=	rdseed_rng
 .endif
@@ -903,9 +912,6 @@ _glxsb=		glxsb
 _pcfclock=	pcfclock
 _pst=		pst
 _sbni=		sbni
-.if ${MK_CRYPT} != "no" || defined(ALL_MODULES)
-_padlock_rng=	padlock_rng
-.endif
 .endif
 
 .if ${MACHINE_ARCH} == "armv7"
@@ -937,10 +943,6 @@ _nvram+=	powermac_nvram
 _bcm283x_clkman=  bcm283x_clkman
 _bcm283x_pwm=	bcm283x_pwm
 _neta=		neta
-.endif
-
-.if ${MACHINE_CPUARCH} == "amd64"
-_thunderbolt=	thunderbolt
 .endif
 
 .if !(${COMPILER_TYPE} == "clang" && ${COMPILER_VERSION} < 110000)

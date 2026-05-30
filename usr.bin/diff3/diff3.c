@@ -1,6 +1,8 @@
 /*	$OpenBSD: diff3prog.c,v 1.11 2009/10/27 23:59:37 deraadt Exp $	*/
 
 /*
+ * SPDX-License-Identifier: Caldera-no-preamble AND BSD-3-Clause
+ *
  * Copyright (C) Caldera International Inc.  2001-2002.
  * All rights reserved.
  *
@@ -71,14 +73,17 @@
 #include <capsicum_helpers.h>
 #include <ctype.h>
 #include <err.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+extern char **environ;
 /*
  * "from" is first in range of changed lines; "to" is last+1
  * from=to=line after point of insertion for added lines.
@@ -157,7 +162,7 @@ static void increase(void);
 static void usage(void);
 static void printrange(FILE *, struct range *);
 
-static const char diff3_version[] = "FreeBSD diff3 20240925";
+static const char diff3_version[] = "FreeBSD diff3 20260213";
 
 enum {
 	DIFFPROG_OPT,
@@ -202,7 +207,7 @@ strtoi(char *str, char **end)
 	if ((end != NULL && *end == str) ||
 	    num < 0 || num > INT_MAX ||
 	    errno == EINVAL || errno == ERANGE)
-		err(1, "error in diff output");
+		err(2, "error in diff output");
 	return (int)num;
 }
 
@@ -267,7 +272,7 @@ readin(int fd, struct diff **dd)
 		if (*p == ',')
 			d = strtoi(p + 1, &p);
 		if (*p != '\n')
-			errx(1, "error in diff output");
+			errx(2, "error in diff output");
 		if (kind == 'a')
 			a++;
 		else if (kind == 'c')
@@ -275,11 +280,11 @@ readin(int fd, struct diff **dd)
 		else if (kind == 'd')
 			c++;
 		else
-			errx(1, "error in diff output");
+			errx(2, "error in diff output");
 		b++;
 		d++;
 		if (b < a || d < c)
-			errx(1, "error in diff output");
+			errx(2, "error in diff output");
 		(*dd)[i].old.from = a;
 		(*dd)[i].old.to = b;
 		(*dd)[i].new.from = c;
@@ -287,7 +292,7 @@ readin(int fd, struct diff **dd)
 		if (i > 0) {
 			if ((*dd)[i].old.from < (*dd)[i - 1].old.to ||
 			    (*dd)[i].new.from < (*dd)[i - 1].new.to)
-				errx(1, "diff output out of order");
+				errx(2, "diff output out of order");
 		}
 	}
 	if (i > 0) {
@@ -299,23 +304,27 @@ readin(int fd, struct diff **dd)
 }
 
 static int
-diffexec(const char *diffprog, char **diffargv, int fd[])
+diffexec(char **diffargv, int fd[])
 {
-	int pd;
+	posix_spawnattr_t sa;
+	posix_spawn_file_actions_t fa;
+	pid_t pid;
+	int pd, error;
 
-	switch (pdfork(&pd, PD_CLOEXEC)) {
-	case 0:
-		close(fd[0]);
-		if (dup2(fd[1], STDOUT_FILENO) == -1)
-			err(2, "child could not duplicate descriptor");
-		close(fd[1]);
-		execvp(diffprog, diffargv);
-		err(2, "could not execute diff: %s", diffprog);
-		break;
-	case -1:
-		err(2, "could not fork");
-		break;
-	}
+	if ((error = posix_spawnattr_init(&sa)) != 0)
+		errc(2, error, "posix_spawnattr_init");
+	if ((error = posix_spawn_file_actions_init(&fa)) != 0)
+		errc(2, error, "posix_spawn_file_actions_init");
+
+	posix_spawnattr_setprocdescp_np(&sa, &pd, 0);
+	posix_spawn_file_actions_adddup2(&fa, fd[1], STDOUT_FILENO);
+
+	error = posix_spawn(&pid, diffargv[0], &fa, &sa, diffargv, environ);
+	if (error != 0)
+		errc(2, error, "could not spawn diff");
+
+	posix_spawn_file_actions_destroy(&fa);
+	posix_spawnattr_destroy(&sa);
 	close(fd[1]);
 	return (pd);
 }
@@ -564,7 +573,7 @@ skip(int i, int from, const char *pr)
 
 	for (n = 0; cline[i] < from - 1; n += j) {
 		if ((line = get_line(fp[i], &j)) == NULL)
-			errx(1, "logic error");
+			errx(2, "logic error");
 		if (pr != NULL)
 			printf("%s%s", Tflag == 1 ? "\t" : pr, line);
 		cline[i]++;
@@ -595,7 +604,7 @@ duplicate(struct range *r1, struct range *r2)
 			if (c == -1 && d == -1)
 				break;
 			if (c == -1 || d == -1)
-				errx(1, "logic error");
+				errx(2, "logic error");
 			nchar++;
 			if (c != d) {
 				repos(nchar);
@@ -652,7 +661,7 @@ printrange(FILE *p, struct range *r)
 		return;
 
 	if (r->from > r->to)
-		errx(1, "invalid print range");
+		errx(2, "invalid print range");
 
 	/*
 	 * XXX-THJ: We read through all of the file for each range printed.
@@ -900,27 +909,27 @@ increase(void)
 
 	p = reallocarray(d13, newsz, sizeof(*p));
 	if (p == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(p + szchanges, 0, incr * sizeof(*p));
 	d13 = p;
 	p = reallocarray(d23, newsz, sizeof(*p));
 	if (p == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(p + szchanges, 0, incr * sizeof(*p));
 	d23 = p;
 	p = reallocarray(de, newsz, sizeof(*p));
 	if (p == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(p + szchanges, 0, incr * sizeof(*p));
 	de = p;
 	q = reallocarray(overlap, newsz, 1);
 	if (q == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(q + szchanges, 0, incr * 1);
 	overlap = q;
 	s = reallocarray(de_delta, newsz, sizeof(*s));
 	if (s == NULL)
-		err(1, NULL);
+		err(2, NULL);
 	memset(s + szchanges, 0, incr * sizeof(*s));
 	de_delta = s;
 	szchanges = newsz;
@@ -935,6 +944,7 @@ wait_and_check(int pd)
 		if (errno != EINTR)
 			err(2, "pdwait");
 	}
+	close(pd);
 
 	if (WIFEXITED(status) && WEXITSTATUS(status) >= 2)
 		errx(2, "diff exited abnormally");
@@ -1002,7 +1012,7 @@ main(int argc, char **argv)
 			eflag = EFLAG_OVERLAP;
 			break;
 		case DIFFPROG_OPT:
-			diffprog = optarg;
+			diffargv[0] = optarg;
 			break;
 		case STRIPCR_OPT:
 			strip_cr = 1;
@@ -1072,18 +1082,18 @@ main(int argc, char **argv)
 	if (caph_rights_limit(fileno(fp[2]), &rights_ro) < 0)
 		err(2, "unable to limit rights on: %s", file3);
 
-	if (pipe(fd13))
+	if (pipe2(fd13, O_CLOEXEC))
 		err(2, "pipe");
-	if (pipe(fd23))
+	if (pipe2(fd23, O_CLOEXEC))
 		err(2, "pipe");
 
 	diffargv[diffargc] = file1;
 	diffargv[diffargc + 1] = file3;
 	diffargv[diffargc + 2] = NULL;
-	pd13 = diffexec(diffprog, diffargv, fd13);
+	pd13 = diffexec(diffargv, fd13);
 
 	diffargv[diffargc] = file2;
-	pd23 = diffexec(diffprog, diffargv, fd23);
+	pd23 = diffexec(diffargv, fd23);
 
 	caph_cache_catpages();
 	if (caph_enter() < 0)

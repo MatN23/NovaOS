@@ -37,6 +37,7 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <grp.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -1620,7 +1621,6 @@ int	voss_is_recording = 1;
 int	voss_has_synchronization;
 volatile sig_atomic_t voss_exit = 0;
 
-static int voss_dsp_perm = 0666;
 static int voss_do_background;
 static int voss_baseclone = 0;
 static const char *voss_pid_path;
@@ -1864,7 +1864,24 @@ dup_profile(vprofile_t *pvp, int *pamp, int pol, int rx_mute,
 {
 	vprofile_t *ptr;
 	struct cuse_dev *pdev;
-	int x;
+	struct group *gr;
+	gid_t gid;
+	int x, perm;
+
+	if (!is_client) {
+		/*
+		 * Loopback devices can be used only by users who part of the
+		 * audio group, to avoid unintended snooping by unprivileged
+		 * users.
+		 */
+		if ((gr = getgrnam("audio")) == NULL)
+			return ("getgrnam() failed");
+		gid = gr->gr_gid;
+		perm = 0660;
+	} else {
+		gid = 0;
+		perm = 0666;
+	}
 
 	rx_mute = rx_mute ? 1 : 0;
 	tx_mute = tx_mute ? 1 : 0;
@@ -1918,7 +1935,7 @@ dup_profile(vprofile_t *pvp, int *pamp, int pol, int rx_mute,
 
 		/* create DSP character device */
 		pdev = cuse_dev_create(&vclient_oss_methods, ptr, NULL,
-		    0, 0, voss_dsp_perm, ptr->oss_name);
+		    0, gid, perm, ptr->oss_name);
 		if (pdev == NULL) {
 			free(ptr);
 			return ("Could not create CUSE DSP device");
@@ -1935,7 +1952,7 @@ dup_profile(vprofile_t *pvp, int *pamp, int pol, int rx_mute,
 	/* create WAV device */
 	if (ptr->wav_name[0] != 0) {
 		pdev = cuse_dev_create(&vclient_wav_methods, ptr, NULL,
-		    0, 0, voss_dsp_perm, ptr->wav_name);
+		    0, gid, perm, ptr->wav_name);
 		if (pdev == NULL) {
 			free(ptr);
 			return ("Could not create CUSE WAV device");
@@ -2228,6 +2245,8 @@ parse_options(int narg, char **pparg, int is_main)
 			strncpy(profile.wav_name, optarg, sizeof(profile.wav_name));
 			break;
 		case 'd':
+		case 'L':
+		case 'l':
 			if (strlen(optarg) > VMAX_STRING - 1)
 				return ("Device name too long");
 			strncpy(profile.oss_name, optarg, sizeof(profile.oss_name));
@@ -2242,27 +2261,7 @@ parse_options(int narg, char **pparg, int is_main)
 				return ("-s option value is too big");
 
 			ptr = dup_profile(&profile, opt_amp, opt_pol,
-			    opt_mute[0], opt_mute[1], 0, 1);
-			if (ptr != NULL)
-				return (ptr);
-			break;
-		case 'L':
-		case 'l':
-			if (strlen(optarg) > VMAX_STRING - 1)
-				return ("Device name too long");
-			strncpy(profile.oss_name, optarg, sizeof(profile.oss_name));
-
-			if (profile.bits == 0 || voss_dsp_sample_rate == 0 ||
-			    profile.channels == 0 || voss_dsp_samples == 0)
-				return ("Missing -b, -r, -r or -s parameters");
-
-			val = (voss_dsp_samples *
-			    profile.bits * profile.channels) / 8;
-			if (val <= 0 || val >= (1024 * 1024))
-				return ("-s option value is too big");
-
-			ptr = dup_profile(&profile, opt_amp, opt_pol,
-			    opt_mute[0], opt_mute[1], c == 'L', 0);
+			    opt_mute[0], opt_mute[1], c == 'L', c == 'd');
 			if (ptr != NULL)
 				return (ptr);
 			break;
@@ -2630,7 +2629,7 @@ main(int argc, char **argv)
 
 	if (voss_ctl_device[0] != 0) {
 		pdev = cuse_dev_create(&vctl_methods, NULL, NULL,
-		    0, 0, voss_dsp_perm, voss_ctl_device);
+		    0, 0, 0666, voss_ctl_device);
 		if (pdev == NULL)
 			errx(EX_USAGE, "Could not create '/dev/%s'", voss_ctl_device);
 

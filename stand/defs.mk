@@ -11,6 +11,7 @@ FORTIFY_SOURCE=	0
 MK_CTF=		no
 MK_SSP=		no
 MK_PIE=		no
+MK_RETPOLINE=	no
 MK_ZEROREGS=	no
 MAN=
 .if !defined(PIC)
@@ -77,7 +78,7 @@ LIBSA=		${BOOTOBJ}/libsa/libsa.a
 .if ${MACHINE} == "i386"
 LIBSA32=	${LIBSA}
 .else
-LIBSA32=	${BOOTOBJ}/libsa32/libsa32.a
+LIBSA32=	${BOOTOBJ}/${"${LOADER}" == "loader_ia32":?efi/libsa32efi:libsa32}/libsa32.a
 .endif
 
 # Standard options:
