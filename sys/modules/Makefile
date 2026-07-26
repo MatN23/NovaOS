@@ -43,6 +43,7 @@ SUBDIR=	\
 	${_allwinner} \
 	${_armv8crypto} \
 	${_armv8_rng} \
+	${_apple_bce} \
 	${_asmc} \
 	ata \
 	${_aq} \
@@ -296,6 +297,7 @@ SUBDIR=	\
 	nlsysevent \
 	nge \
 	nmdm \
+	ntsync \
 	nullfs \
 	${_ntb} \
 	nvd \
@@ -542,6 +544,7 @@ SUBDIR+=	fdt
     ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	linprocfs
 SUBDIR+=	linsysfs
+SUBDIR+=	linux_ntsync
 .endif
 .if ${MACHINE_CPUARCH} == "amd64" || ${MACHINE_CPUARCH} == "i386"
 SUBDIR+=	linux
@@ -861,6 +864,7 @@ _x86bios=	x86bios
 
 .if ${MACHINE_CPUARCH} == "amd64"
 _amdgpio=	amdgpio
+_apple_bce=	apple_bce
 _asmc=		asmc
 _ccp=		ccp
 _enic=		enic

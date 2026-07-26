@@ -64,9 +64,11 @@
 
 #include <sys/param.h>
 #include <sys/capsicum.h>
+#include <sys/event.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
 #include <sys/filedesc.h>
+#include <sys/imgact.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
@@ -115,38 +117,6 @@ static const struct fileops procdesc_ops = {
 };
 
 /*
- * Return a locked process given a process descriptor, or ESRCH if it has
- * died.
- */
-int
-procdesc_find(struct thread *td, int fd, const cap_rights_t *rightsp,
-    struct proc **p)
-{
-	struct procdesc *pd;
-	struct file *fp;
-	int error;
-
-	error = fget(td, fd, rightsp, &fp);
-	if (error)
-		return (error);
-	if (fp->f_type != DTYPE_PROCDESC) {
-		error = EINVAL;
-		goto out;
-	}
-	pd = fp->f_data;
-	sx_slock(&proctree_lock);
-	if (pd->pd_proc != NULL) {
-		*p = pd->pd_proc;
-		PROC_LOCK(*p);
-	} else
-		error = ESRCH;
-	sx_sunlock(&proctree_lock);
-out:
-	fdrop(fp, td);
-	return (error);
-}
-
-/*
  * Function to be used by procstat(1) sysctls when returning procdesc
  * information.
  */
@@ -172,16 +142,11 @@ kern_pdgetpid(struct thread *td, int fd, const cap_rights_t *rightsp,
 	struct file *fp;
 	int error;
 
-	error = fget(td, fd, rightsp, &fp);
-	if (error)
-		return (error);
-	if (fp->f_type != DTYPE_PROCDESC) {
-		error = EBADF;
-		goto out;
-	}
-	*pidp = procdesc_pid(fp);
-out:
-	fdrop(fp, td);
+	error = fget_procdesc(td, fd, rightsp, &fp, NULL, NULL);
+	if (error == 0)
+		*pidp = procdesc_pid(fp);
+	if (fp != NULL)
+		fdrop(fp, td);
 	return (error);
 }
 
@@ -201,6 +166,27 @@ sys_pdgetpid(struct thread *td, struct pdgetpid_args *uap)
 	return (error);
 }
 
+static struct procdesc *
+procdesc_alloc(int flags)
+{
+	struct procdesc *pd;
+
+	pd = malloc(sizeof(*pd), M_PROCDESC, M_WAITOK | M_ZERO);
+	pd->pd_flags = 0;
+	pd->pd_pid = -1;
+	PROCDESC_LOCK_INIT(pd);
+	knlist_init_mtx(&pd->pd_selinfo.si_note, &pd->pd_lock);
+
+	/*
+	 * Process descriptors start out with two references: one from their
+	 * struct file, and the other from their struct proc.
+	 */
+	refcount_init(&pd->pd_refcount, 2);
+	pd->pd_fpcount = 1;
+
+	return (pd);
+}
+
 /*
  * When a new process is forked by pdfork(), a file descriptor is allocated
  * by the fork code first, then the process is forked, and then we get a
@@ -212,21 +198,22 @@ procdesc_new(struct proc *p, int flags)
 {
 	struct procdesc *pd;
 
-	pd = malloc(sizeof(*pd), M_PROCDESC, M_WAITOK | M_ZERO);
+	pd = procdesc_alloc(flags);
 	pd->pd_proc = p;
 	pd->pd_pid = p->p_pid;
+	MPASS(p->p_procdesc == NULL);
 	p->p_procdesc = pd;
-	pd->pd_flags = 0;
-	if (flags & PD_DAEMON)
-		pd->pd_flags |= PDF_DAEMON;
-	PROCDESC_LOCK_INIT(pd);
-	knlist_init_mtx(&pd->pd_selinfo.si_note, &pd->pd_lock);
+}
 
-	/*
-	 * Process descriptors start out with two references: one from their
-	 * struct file, and the other from their struct proc.
-	 */
-	refcount_init(&pd->pd_refcount, 2);
+static int
+pdtofdflags(int flags)
+{
+	int fflags;
+
+	fflags = 0;
+	if (flags & PD_CLOEXEC)
+		fflags |= O_CLOEXEC;
+	return (fflags);
 }
 
 /*
@@ -236,13 +223,12 @@ int
 procdesc_falloc(struct thread *td, struct file **resultfp, int *resultfd,
     int flags, struct filecaps *fcaps)
 {
-	int fflags;
+	int error;
 
-	fflags = 0;
-	if (flags & PD_CLOEXEC)
-		fflags = O_CLOEXEC;
-
-	return (falloc_caps(td, resultfp, resultfd, fflags, fcaps));
+	error = falloc_caps(td, resultfp, resultfd, pdtofdflags(flags), fcaps);
+	if (error == 0 && (flags & PD_DAEMON) != 0)
+		(*resultfp)->f_pdflags |= F_PD_NOKILL;
+	return (error);
 }
 
 /*
@@ -253,6 +239,14 @@ procdesc_finit(struct procdesc *pdp, struct file *fp)
 {
 
 	finit(fp, FREAD | FWRITE, DTYPE_PROCDESC, pdp, &procdesc_ops);
+}
+
+static void
+procdesc_destroy(struct procdesc *pd)
+{
+	knlist_destroy(&pd->pd_selinfo.si_note);
+	PROCDESC_LOCK_DESTROY(pd);
+	free(pd, M_PROCDESC);
 }
 
 static void
@@ -268,16 +262,14 @@ procdesc_free(struct procdesc *pd)
 	if (refcount_release(&pd->pd_refcount)) {
 		KASSERT(pd->pd_proc == NULL,
 		    ("procdesc_free: pd_proc != NULL"));
-		KASSERT((pd->pd_flags & PDF_CLOSED),
-		    ("procdesc_free: !PDF_CLOSED"));
+		KASSERT(pd->pd_fpcount == 0,
+		    ("procdesc_free: not closed %p %d", pd, pd->pd_fpcount));
 
 		if (pd->pd_pid != -1)
 			proc_id_clear(PROC_ID_PID, pd->pd_pid);
 
 		seldrain(&pd->pd_selinfo);
-		knlist_destroy(&pd->pd_selinfo.si_note);
-		PROCDESC_LOCK_DESTROY(pd);
-		free(pd, M_PROCDESC);
+		procdesc_destroy(pd);
 	}
 }
 
@@ -286,44 +278,63 @@ procdesc_free(struct procdesc *pd)
  * We use the proctree_lock to ensure that process exit either happens
  * strictly before or strictly after a concurrent call to procdesc_close().
  */
-int
+void
 procdesc_exit(struct proc *p)
 {
 	struct procdesc *pd;
 
 	sx_assert(&proctree_lock, SA_XLOCKED);
 	PROC_LOCK_ASSERT(p, MA_OWNED);
-	KASSERT(p->p_procdesc != NULL, ("procdesc_exit: p_procdesc NULL"));
+	MPASS((p->p_flag & P_WEXIT) != 0);
 
 	pd = p->p_procdesc;
+	if (pd == NULL)
+		return;
 
 	PROCDESC_LOCK(pd);
-	KASSERT((pd->pd_flags & PDF_CLOSED) == 0 || p->p_pptr == p->p_reaper,
-	    ("procdesc_exit: closed && parent not reaper"));
+	KASSERT(pd->pd_fpcount > 0, ("%s: closed procdesc %p", __func__, pd));
 
 	pd->pd_flags |= PDF_EXITED;
 	pd->pd_xstat = KW_EXITCODE(p->p_xexit, p->p_xsig);
 
-	/*
-	 * If the process descriptor has been closed, then we have nothing
-	 * to do; return 1 so that init will get SIGCHLD and do the reaping.
-	 * Clean up the procdesc now rather than letting it happen during
-	 * that reap.
-	 */
-	if (pd->pd_flags & PDF_CLOSED) {
-		PROCDESC_UNLOCK(pd);
-		pd->pd_proc = NULL;
-		p->p_procdesc = NULL;
-		procdesc_free(pd);
-		return (1);
-	}
 	selwakeup(&pd->pd_selinfo);
-	KNOTE_LOCKED(&pd->pd_selinfo.si_note, NOTE_EXIT);
+	KNOTE_LOCKED(&pd->pd_selinfo.si_note, NOTE_EXIT | NOTE_PDSIGCHLD);
 	PROCDESC_UNLOCK(pd);
 
 	/* Wakeup all waiters for this procdesc' process exit. */
 	wakeup(&p->p_procdesc);
-	return (0);
+}
+
+void
+procdesc_jobstate(struct proc *p)
+{
+	struct procdesc *pd;
+
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+	pd = p->p_procdesc;
+	if (pd == NULL)
+		return;
+
+	PROCDESC_LOCK(pd);
+	KNOTE_LOCKED(&pd->pd_selinfo.si_note, NOTE_PDSIGCHLD);
+	PROCDESC_UNLOCK(pd);
+	wakeup(&p->p_procdesc);
+}
+
+void
+procdesc_fork(struct proc *p, pid_t child_pid)
+{
+	struct procdesc *pd;
+
+	PROC_LOCK(p);
+	pd = p->p_procdesc;
+	if (pd != NULL) {
+		PROCDESC_LOCK(pd);
+		pd->pd_last_child = child_pid;
+		KNOTE_LOCKED(&pd->pd_selinfo.si_note, NOTE_FORK);
+		PROCDESC_UNLOCK(pd);
+	}
+	PROC_UNLOCK(p);
 }
 
 /*
@@ -342,6 +353,15 @@ procdesc_reap(struct proc *p)
 	pd->pd_proc = NULL;
 	p->p_procdesc = NULL;
 	procdesc_free(pd);
+}
+
+static void
+procdesc_close_tail(struct file *fp, struct proc *p)
+{
+	if ((fp->f_pdflags & F_PD_NOKILL) == 0)
+		kern_psignal(p, SIGKILL);
+	PROC_UNLOCK(p);
+	sx_xunlock(&proctree_lock);
 }
 
 /*
@@ -364,7 +384,8 @@ procdesc_close(struct file *fp, struct thread *td)
 
 	sx_xlock(&proctree_lock);
 	PROCDESC_LOCK(pd);
-	pd->pd_flags |= PDF_CLOSED;
+	MPASS(pd->pd_fpcount > 0);
+	pd->pd_fpcount--;
 	PROCDESC_UNLOCK(pd);
 	p = pd->pd_proc;
 	if (p == NULL) {
@@ -384,7 +405,7 @@ procdesc_close(struct file *fp, struct thread *td)
 			 * calls back into procdesc_reap().
 			 */
 			proc_reap(curthread, p, NULL, 0);
-		} else {
+		} else if (pd->pd_fpcount == 0) /* last procdesc */ {
 			/*
 			 * If the process is not yet dead, we need to kill it,
 			 * but we can't wait around synchronously for it to go
@@ -397,23 +418,26 @@ procdesc_close(struct file *fp, struct thread *td)
 			pd->pd_pid = -1;
 			procdesc_free(pd);
 
-			/*
-			 * Next, reparent it to its reaper (usually init(8)) so
-			 * that there's someone to pick up the pieces; finally,
-			 * terminate with prejudice.
-			 */
-			p->p_sigparent = SIGCHLD;
-			if ((p->p_flag & P_TRACED) == 0) {
-				proc_reparent(p, p->p_reaper, true);
-			} else {
-				proc_clear_orphan(p);
-				p->p_oppid = p->p_reaper->p_pid;
-				proc_add_orphan(p, p->p_reaper);
+			/* Failed finstall() should not cause reaping. */
+			if ((fp->f_pdflags & F_PD_NOFINSTALL) == 0) {
+				/*
+				 * Next, reparent it to its reaper
+				 * (usually init(8)) so that there's
+				 * someone to pick up the pieces;
+				 * finally, terminate with prejudice.
+				 */
+				p->p_sigparent = SIGCHLD;
+				if ((p->p_flag & P_TRACED) == 0) {
+					proc_reparent(p, p->p_reaper, true);
+				} else {
+					proc_clear_orphan(p);
+					p->p_oppid = p->p_reaper->p_pid;
+					proc_add_orphan(p, p->p_reaper);
+				}
 			}
-			if ((pd->pd_flags & PDF_DAEMON) == 0)
-				kern_psignal(p, SIGKILL);
-			PROC_UNLOCK(p);
-			sx_xunlock(&proctree_lock);
+			procdesc_close_tail(fp, p);
+		} else {
+			procdesc_close_tail(fp, p);
 		}
 	}
 
@@ -455,26 +479,36 @@ static int
 procdesc_kqops_event(struct knote *kn, long hint)
 {
 	struct procdesc *pd;
+	struct proc *p;
 	u_int event;
 
 	pd = kn->kn_fp->f_data;
 	if (hint == 0) {
 		/*
-		 * Initial test after registration. Generate a NOTE_EXIT in
-		 * case the process already terminated before registration.
+		 * Initial test after registration.  Generate notes in
+		 * case the process already terminated before
+		 * registration, or is stopped, or traced, with an event
+		 * pending.
 		 */
-		event = pd->pd_flags & PDF_EXITED ? NOTE_EXIT : 0;
+		p = pd->pd_proc;
+		if ((pd->pd_flags & PDF_EXITED) != 0)
+			event = NOTE_EXIT | NOTE_PDSIGCHLD;
+		else if ((atomic_load_int(&p->p_flag) & (P_STOPPED_SIG |
+		    P_STOPPED_TRACE)) != 0)
+			event = NOTE_PDSIGCHLD;
+		else
+			event = 0;
 	} else {
 		/* Mask off extra data. */
 		event = (u_int)hint & NOTE_PCTRLMASK;
 	}
 
 	/* If the user is interested in this event, record it. */
-	if (kn->kn_sfflags & event)
-		kn->kn_fflags |= event;
+	if ((kn->kn_sfflags & event) != 0)
+		kn->kn_fflags |= kn->kn_sfflags & event;
 
 	/* Process is gone, so flag the event as finished. */
-	if (event == NOTE_EXIT) {
+	if ((event & NOTE_EXIT) != 0) {
 		kn->kn_flags |= EV_EOF | EV_ONESHOT;
 		if (kn->kn_fflags & NOTE_EXIT)
 			kn->kn_data = pd->pd_xstat;
@@ -482,6 +516,9 @@ procdesc_kqops_event(struct knote *kn, long hint)
 			kn->kn_flags |= EV_DROP;
 		return (1);
 	}
+
+	if ((kn->kn_fflags & NOTE_FORK) != 0)
+		kn->kn_data = pd->pd_last_child;
 
 	return (kn->kn_fflags != 0);
 }
@@ -571,4 +608,209 @@ procdesc_cmp(struct file *fp1, struct file *fp2, struct thread *td)
 	pdp1 = fp1->f_data;
 	pdp2 = fp2->f_data;
 	return (kcmp_cmp((uintptr_t)pdp1->pd_pid, (uintptr_t)pdp2->pd_pid));
+}
+
+static int
+pdopenpid1(struct thread *td, pid_t pid, struct procdesc **pdf, struct file *fp)
+{
+	struct proc *p;
+	struct procdesc *pd;
+	int error;
+
+	sx_assert(&proctree_lock, SX_XLOCKED);
+
+	error = pget(pid, PGET_NOTID | PGET_CANDEBUG, &p);
+	if (error != 0)
+		return (error);
+	if ((p->p_flag & (P_SYSTEM | P_WEXIT)) != 0) {
+		PROC_UNLOCK(p);
+		return (EBUSY);
+	}
+	pd = p->p_procdesc;
+	if (pd != NULL) {
+		refcount_acquire(&pd->pd_refcount);
+		PROCDESC_LOCK(pd);
+		MPASS(pd->pd_fpcount > 0);
+		pd->pd_fpcount++;
+		PROCDESC_UNLOCK(pd);
+	} else {
+		pd = *pdf;
+		*pdf = NULL;
+		pd->pd_proc = p;
+		pd->pd_pid = p->p_pid;
+		p->p_procdesc = pd;
+	}
+	procdesc_finit(pd, fp);
+	PROC_UNLOCK(p);
+	return (0);
+}
+
+static int
+kern_pdopenpid(struct thread *td, pid_t pid, int flags)
+{
+	struct file *fp;
+	struct procdesc *pdf;
+	int error, fd, fflags;
+
+	error = falloc_noinstall(td, &fp);
+	if (error != 0)
+		return (error);
+	fflags = pdtofdflags(flags);
+	pdf = procdesc_alloc(flags);
+	if ((flags & PD_DAEMON) != 0)
+		fp->f_pdflags |= F_PD_NOKILL;
+
+	sx_xlock(&proctree_lock);
+	error = pdopenpid1(td, pid, &pdf, fp);
+	sx_xunlock(&proctree_lock);
+
+	if (error == 0) {
+		error = finstall(td, fp, &fd, fflags, NULL);
+		if (error == 0) {
+			td->td_retval[0] = fd;
+		} else {
+			/*
+			 * Not killing the target process if cannot
+			 * return file descriptor to userspace.
+			 */
+			fp->f_pdflags |= F_PD_NOKILL | F_PD_NOFINSTALL;
+		}
+	}
+	fdrop(fp, td);
+
+	if (pdf != NULL) {
+		MPASS(pdf->pd_refcount == 2);
+		MPASS(pdf->pd_fpcount == 1);
+		MPASS(pdf->pd_proc == NULL);
+		MPASS(pdf->pd_pid == -1);
+		procdesc_destroy(pdf);
+	}
+	return (error);
+}
+
+int
+sys_pdopenpid(struct thread *td, struct pdopenpid_args *args)
+{
+	AUDIT_ARG_PID(args->pid);
+	AUDIT_ARG_FFLAGS(args->flags);
+
+	if ((args->flags & ~(PD_ALLOWED_AT_FORK)) != 0)
+		return (EINVAL);
+	return (kern_pdopenpid(td, args->pid, args->flags));
+}
+
+/*
+ * Get the file/process descriptor/process from the procdesc file
+ * descriptor.  The process descriptor and process returns are
+ * optional.  If requested to return the process, the proctree lock
+ * must be held, and the process will be returned locked.
+ *
+ * The caller must fdrop(*pfp) if *pfp != NULL, regardless of the
+ * error returned, after the proctree_lock is unlocked.
+ * procdesc_close() takes the proctree_lock.
+ */
+int
+fget_procdesc(struct thread *td, int pdfd, const cap_rights_t *cap_rights,
+    struct file **pfp, struct procdesc **pdp, struct proc **pp)
+{
+	struct file *fp;
+	struct procdesc *pd;
+	struct proc *p;
+	int error;
+
+	if (pp != NULL)
+		sx_assert(&proctree_lock, SX_LOCKED);
+
+	*pfp = NULL;
+	error = fget(td, pdfd, cap_rights, &fp);
+	if (error != 0)
+		return (error);
+	*pfp = fp;
+	if (fp->f_type != DTYPE_PROCDESC)
+		return (EINVAL);
+	pd = fp->f_data;
+	if (pp != NULL) {
+		p = pd->pd_proc;
+		if (p == NULL) {
+			return (ESRCH);
+		} else {
+			*pp = p;
+			PROC_LOCK(p);
+		}
+	}
+	if (pdp != NULL)
+		*pdp = pd;
+	return (0);
+}
+
+static int
+kern_pddupfd(struct thread *td, int pdfd, int fd, int flags)
+{
+	struct proc *p;
+	struct file *fp, *pfp;
+	struct filecaps fcaps;
+	uint8_t fd_flags;
+	int error, fdr;
+
+	sx_slock(&proctree_lock);
+	error = fget_procdesc(td, pdfd, &cap_pddupfd_rights, &pfp, NULL, &p);
+	if (error == 0) {
+		if ((p->p_flag & P_WEXIT) != 0) {
+			error = ESRCH;
+			PROC_UNLOCK(p);
+		} else {
+			_PHOLD(p);
+		}
+	}
+	sx_sunlock(&proctree_lock);
+	if (error != 0)
+		goto out;
+	AUDIT_ARG_PROCESS(p);
+	PROC_LOCK_ASSERT(p, MA_OWNED);
+
+	/*
+	 * Block the target process from entering execve().
+	 * We need to ensure that the p_candebug() predicate
+	 * is stable until the fget_remote() call ends even
+	 * after the process lock is dropped.  For that, the
+	 * process must not change uid/suid.
+	 */
+	execve_block_wait(td, p);
+	error = p_candebug(td, p);
+
+	if (error == 0) {
+		PROC_UNLOCK(p);
+		error = fget_remote(td, p, fd, &fcaps, &fd_flags, &fp);
+		if (error == 0) {
+			if ((fp->f_ops->fo_flags & DFLAG_PASSABLE) == 0) {
+				error = EOPNOTSUPP;
+			} else {
+				error = finstall_refed(td, fp, &fdr, O_CLOEXEC |
+				    ((fd_flags & FD_RESOLVE_BENEATH) != 0 ?
+				    O_RESOLVE_BENEATH : 0), &fcaps);
+			}
+			if (error != 0) {
+				fdrop(fp, td);
+				filecaps_free(&fcaps);
+			} else {
+				td->td_retval[0] = fdr;
+			}
+		}
+		PROC_LOCK(p);
+	}
+	execve_unblock(td, p);
+	_PRELE(p);
+	PROC_UNLOCK(p);
+out:
+	if (pfp != NULL)
+		fdrop(pfp, td);
+	return (error);
+}
+
+int
+sys_pddupfd(struct thread *td, struct pddupfd_args *args)
+{
+	if (args->flags != 0)
+		return (EINVAL);
+	return (kern_pddupfd(td, args->pd, args->fd, args->flags));
 }

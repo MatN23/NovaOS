@@ -49,6 +49,7 @@
 #include <sys/filedesc.h>
 #include <sys/filio.h>
 #include <sys/fcntl.h>
+#include <sys/imgact.h>
 #include <sys/jail.h>
 #include <sys/jaildesc.h>
 #include <sys/kthread.h>
@@ -528,11 +529,11 @@ filt_proc(struct knote *kn, long hint)
 	event = (u_int)hint & NOTE_PCTRLMASK;
 
 	/* If the user is interested in this event, record it. */
-	if (kn->kn_sfflags & event)
-		kn->kn_fflags |= event;
+	if ((kn->kn_sfflags & event) != 0)
+		kn->kn_fflags |= kn->kn_sfflags & event;
 
 	/* Process is gone, so flag the event as finished. */
-	if (event == NOTE_EXIT) {
+	if ((event & NOTE_EXIT) != 0) {
 		kn->kn_flags |= EV_EOF | EV_ONESHOT;
 		kn->kn_ptr.p_proc = NULL;
 		if (kn->kn_fflags & NOTE_EXIT)
@@ -2108,7 +2109,7 @@ kqueue_scan(struct kqueue *kq, int maxevents, struct kevent_copyops *k_ops,
     const struct timespec *tsp, struct kevent *keva, struct thread *td)
 {
 	struct kevent *kevp;
-	struct knote *kn, *marker;
+	struct knote *kn, marker;
 	struct knlist *knl;
 	sbintime_t asbt, rsbt;
 	int count, error, haskqglobal, influx, nkev, touch;
@@ -2147,8 +2148,8 @@ kqueue_scan(struct kqueue *kq, int maxevents, struct kevent_copyops *k_ops,
 			asbt = -1;
 	} else
 		asbt = 0;
-	marker = knote_alloc(M_WAITOK);
-	marker->kn_status = KN_MARKER;
+	memset(&marker, 0, sizeof(marker));
+	marker.kn_status = KN_MARKER;
 	KQ_LOCK(kq);
 
 retry:
@@ -2171,13 +2172,13 @@ retry:
 		goto done;
 	}
 
-	TAILQ_INSERT_TAIL(&kq->kq_head, marker, kn_tqe);
+	TAILQ_INSERT_TAIL(&kq->kq_head, &marker, kn_tqe);
 	influx = 0;
 	while (count) {
 		KQ_OWNED(kq);
 		kn = TAILQ_FIRST(&kq->kq_head);
 
-		if ((kn->kn_status == KN_MARKER && kn != marker) ||
+		if ((kn->kn_status == KN_MARKER && kn != &marker) ||
 		    kn_in_flux(kn)) {
 			if (influx) {
 				influx = 0;
@@ -2195,7 +2196,7 @@ retry:
 			kq->kq_count--;
 			continue;
 		}
-		if (kn == marker) {
+		if (kn == &marker) {
 			KQ_FLUX_WAKEUP(kq);
 			if (count == maxevents)
 				goto retry;
@@ -2293,11 +2294,10 @@ retry:
 				break;
 		}
 	}
-	TAILQ_REMOVE(&kq->kq_head, marker, kn_tqe);
+	TAILQ_REMOVE(&kq->kq_head, &marker, kn_tqe);
 done:
 	KQ_OWNED(kq);
 	KQ_UNLOCK_FLUX(kq);
-	knote_free(marker);
 done_nl:
 	KQ_NOTOWNED(kq);
 	if (nkev != 0)
@@ -3147,7 +3147,7 @@ kqueue_fork_copy(struct filedesc *fdp, struct file *fp, struct file *fp1,
     struct proc *p1, struct thread *td)
 {
 	struct kqueue *kq, *kq1;
-	struct knote *marker;
+	struct knote marker;
 	int error, i;
 
 	error = 0;
@@ -3156,26 +3156,24 @@ kqueue_fork_copy(struct filedesc *fdp, struct file *fp, struct file *fp1,
 
 	kq1 = fp1->f_data;
 	kq = kq1->kq_forksrc;
-	marker = knote_alloc(M_WAITOK);
-	marker->kn_status = KN_MARKER;
-	marker->kn_kq = kq;
+	memset(&marker, 0, sizeof(marker));
+	marker.kn_status = KN_MARKER;
+	marker.kn_kq = kq;
 
 	KQ_LOCK(kq);
 	for (i = 0; i < kq->kq_knlistsize; i++) {
-		kqueue_fork_copy_list(&kq->kq_knlist[i], marker, kq, kq1,
+		kqueue_fork_copy_list(&kq->kq_knlist[i], &marker, kq, kq1,
 		    p1, fdp);
 	}
 	if (kq->kq_knhashmask != 0) {
 		for (i = 0; i <= kq->kq_knhashmask; i++) {
-			kqueue_fork_copy_list(&kq->kq_knhash[i], marker, kq,
+			kqueue_fork_copy_list(&kq->kq_knhash[i], &marker, kq,
 			    kq1, p1, fdp);
 		}
 	}
 	kqueue_release(kq, 1);
 	kq1->kq_forksrc = NULL;
 	KQ_UNLOCK_FLUX(kq);
-
-	knote_free(marker);
 	return (error);
 }
 
@@ -3354,7 +3352,7 @@ sysctl_kern_proc_kqueue_one(struct thread *td, struct sbuf *s, struct proc *p,
 	struct kqueue *kq;
 	int error;
 
-	error = fget_remote(td, p, kq_fd, &fp);
+	error = fget_remote(td, p, kq_fd, NULL, NULL, &fp);
 	if (error == 0) {
 		if (fp->f_type != DTYPE_KQUEUE) {
 			error = EINVAL;
@@ -3381,16 +3379,23 @@ sysctl_kern_proc_kqueue(SYSCTL_HANDLER_ARGS)
 	if ((u_int)arg2 > 2 || (u_int)arg2 == 0)
 		return (EINVAL);
 
-	error = pget((pid_t)name[0], PGET_HOLD | PGET_CANDEBUG, &p);
-	if (error != 0)
-		return (error);
-
 	td = curthread;
 #ifdef COMPAT_FREEBSD32
 	compat32 = SV_CURPROC_FLAG(SV_ILP32);
 #else
 	compat32 = false;
 #endif
+
+	error = pget((pid_t)name[0], PGET_NOTWEXIT, &p);
+	if (error != 0)
+		return (error);
+
+	_PHOLD(p);
+	execve_block_wait(td, p);
+	error = p_candebug(td, p);
+	if (error != 0)
+		goto out1;
+	PROC_UNLOCK(p);
 
 	s = sbuf_new_for_sysctl(&sm, NULL, 0, req);
 	if (s == NULL) {
@@ -3412,7 +3417,11 @@ sysctl_kern_proc_kqueue(SYSCTL_HANDLER_ARGS)
 	sbuf_delete(s);
 
 out:
-	PRELE(p);
+	PROC_LOCK(p);
+out1:
+	execve_unblock(td, p);
+	_PRELE(p);
+	PROC_UNLOCK(p);
 	return (error);
 }
 

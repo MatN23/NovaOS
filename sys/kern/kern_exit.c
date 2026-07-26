@@ -204,9 +204,8 @@ exit_onexit(struct proc *p)
 int
 sys__exit(struct thread *td, struct _exit_args *uap)
 {
-
-	exit1(td, uap->rval, 0);
-	__unreachable();
+	kern_exit(td, uap->rval, 0);
+	return (0);
 }
 
 void
@@ -214,6 +213,48 @@ proc_set_p2_wexit(struct proc *p)
 {
 	PROC_LOCK_ASSERT(p, MA_OWNED);
 	p->p_flag2 |= P2_WEXIT;
+}
+
+static void
+ast_async_exit(struct thread *td, int asts)
+{
+	struct proc *p;
+
+	p = td->td_proc;
+	if ((p->p_flag & P_ASYNC_EXIT) != 0)
+		exit1(td, p->p_xexit, p->p_asig);
+}
+
+/*
+ * The variation on exit1() intended to be used in the syscall
+ * handlers.  Unlike exit1(), it might delay the current process exit
+ * to ast.  This is needed e.g. when _exit(2) is executed due to the
+ * ptrace(PT_SC_REMOTERQ), which must do more work after the syscall
+ * handler call.
+ */
+void
+kern_exit(struct thread *td, int rval, int signo)
+{
+	struct proc *p;
+
+	KASSERT(rval == 0 || signo == 0,
+	    ("kern_exit rv %d sig %d", rval, signo));
+
+	p = td->td_proc;
+	if ((td->td_dbgflags & TDB_SCREMOTEREQ) != 0) {
+		PROC_LOCK(p);
+		p->p_xexit = rval;
+		p->p_asig = signo;
+		p->p_flag |= P_ASYNC_EXIT;
+		ast_sched(td, TDA_ASYNC_EXIT);
+		PROC_UNLOCK(p);
+		return;
+	}
+	if ((p->p_flag & P_ASYNC_EXIT) != 0) {
+		rval = p->p_xexit;
+		signo = p->p_asig;
+	}
+	exit1(td, rval, signo);
 }
 
 /*
@@ -231,6 +272,7 @@ exit1(struct thread *td, int rval, int signo)
 
 	mtx_assert(&Giant, MA_NOTOWNED);
 	KASSERT(rval == 0 || signo == 0, ("exit1 rv %d sig %d", rval, signo));
+	MPASS((td->td_dbgflags & TDB_SCREMOTEREQ) == 0);
 	TSPROCEXIT(td->td_proc->p_pid);
 
 	p = td->td_proc;
@@ -323,6 +365,7 @@ exit1(struct thread *td, int rval, int signo)
 	while (p->p_lock > 0)
 		msleep(&p->p_lock, &p->p_mtx, PWAIT, "exithold", 0);
 
+	MPASS(p->p_execblock == 0);
 	PROC_UNLOCK(p);
 	/* Drain the limit callout while we don't have the proc locked */
 	callout_drain(&p->p_limco);
@@ -637,7 +680,8 @@ exit1(struct thread *td, int rval, int signo)
 	 * exit().
 	 */
 	signal_parent = 0;
-	if (p->p_procdesc == NULL || procdesc_exit(p)) {
+	procdesc_exit(p);
+	if (p->p_procdesc == NULL) {
 		/*
 		 * Notify parent that we're gone.  If parent has the
 		 * PS_NOCLDWAIT flag set, or if the handler is set to SIG_IGN,
@@ -828,7 +872,7 @@ out:
 	sbuf_delete(sb);
 	PROC_LOCK(p);
 	sigexit(td, sig);
-	/* NOTREACHED */
+	return (0);
 }
 
 #ifdef COMPAT_43
@@ -1065,7 +1109,7 @@ proc_reap(struct thread *td, struct proc *p, int *status, int options)
 
 	KASSERT(FIRST_THREAD_IN_PROC(p),
 	    ("proc_reap: no residual thread!"));
-	uma_zfree(proc_zone, p);
+	PROC_TREE_UNREF(p);
 	atomic_add_int(&nprocs, -1);
 }
 
@@ -1136,7 +1180,7 @@ wait_fill_wrusage(struct proc *p, struct __wrusage *wrusage)
 static int
 proc_to_reap(struct thread *td, struct proc *p, idtype_t idtype, id_t id,
     int *status, int options, struct __wrusage *wrusage, siginfo_t *siginfo,
-    int check_only)
+    bool check_only)
 {
 	sx_assert(&proctree_lock, SA_XLOCKED);
 
@@ -1425,7 +1469,7 @@ loop_locked:
 	LIST_FOREACH(p, &q->p_children, p_sibling) {
 		pid = p->p_pid;
 		ret = proc_to_reap(td, p, idtype, id, status, options,
-		    wrusage, siginfo, 0);
+		    wrusage, siginfo, false);
 		if (ret == 0)
 			continue;
 		else if (ret != 1) {
@@ -1471,7 +1515,7 @@ loop_locked:
 	if (nfound == 0) {
 		LIST_FOREACH(p, &q->p_orphans, p_orphan) {
 			ret = proc_to_reap(td, p, idtype, id, NULL, options,
-			    NULL, NULL, 1);
+			    NULL, NULL, true);
 			if (ret != 0) {
 				KASSERT(ret != -1, ("reaped an orphan (pid %d)",
 				    (int)td->td_retval[0]));
@@ -1519,19 +1563,14 @@ kern_pdwait(struct thread *td, int fd, int *status,
 	if (error != 0)
 		return (error);
 
-	error = fget(td, fd, &cap_pdwait_rights, &fp);
+	error = fget_procdesc(td, fd, &cap_pdwait_rights, &fp, &pd, NULL);
 	if (error != 0)
-		return (error);
-	if (fp->f_type != DTYPE_PROCDESC) {
-		error = EINVAL;
 		goto exit_unlocked;
-	}
-	pd = fp->f_data;
 
 	for (;;) {
 		/* We own a reference on the procdesc file. */
-		KASSERT((pd->pd_flags & PDF_CLOSED) == 0,
-		    ("PDF_CLOSED proc %p procdesc %p pd flags %#x",
+		KASSERT(pd->pd_fpcount > 0,
+		    ("closed proc %p procdesc %p pd flags %#x",
 		    p, pd, pd->pd_flags));
 
 		sx_xlock(&proctree_lock);
@@ -1577,7 +1616,8 @@ kern_pdwait(struct thread *td, int fd, int *status,
 exit_tree_locked:
 	sx_xunlock(&proctree_lock);
 exit_unlocked:
-	fdrop(fp, td);
+	if (fp != NULL)
+		fdrop(fp, td);
 	return (error);
 }
 
@@ -1627,3 +1667,10 @@ proc_reparent(struct proc *child, struct proc *parent, bool set_oppid)
 	if (set_oppid)
 		child->p_oppid = parent->p_pid;
 }
+
+static void
+initexit(void *dummy __unused)
+{
+	ast_register(TDA_ASYNC_EXIT, ASTR_ASTF_REQUIRED, 0, ast_async_exit);
+}
+SYSINIT(exit, SI_SUB_EXEC, SI_ORDER_ANY, initexit, NULL);

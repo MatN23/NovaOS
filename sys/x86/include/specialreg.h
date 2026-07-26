@@ -549,6 +549,9 @@
 /*
  * CPUID instruction 7 Structured Extended Features, leaf 1 eax info
  */
+#define	CPUID_STDEXT4_SHA512		0x00000001
+#define	CPUID_STDEXT4_SM3		0x00000002
+#define	CPUID_STDEXT4_SM4		0x00000004
 #define	CPUID_STDEXT4_LASS		0x00000040
 #define	CPUID_STDEXT4_FRED		0x00020000
 #define	CPUID_STDEXT4_LKGS		0x00040000
@@ -1270,6 +1273,7 @@
 #define	MSR_VM_CR	0xc0010114	/* SVM: feature control */
 #define	MSR_VM_HSAVE_PA 0xc0010117	/* SVM: host save area address */
 #define	MSR_AMD_CPUID07	0xc0011002	/* CPUID 07 %ebx override */
+#define	MSR_AMD_CPUID01	0xc0011004	/* CPUID 01 %ecx override */
 #define	MSR_EXTFEATURES	0xc0011005	/* Extended CPUID Features override */
 #define	MSR_LS_CFG	0xc0011020
 #define	MSR_IC_CFG	0xc0011021	/* Instruction Cache Configuration */

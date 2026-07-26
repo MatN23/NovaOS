@@ -82,6 +82,7 @@ static libusb20_get_power_usage_t ugen20_get_power_usage;
 static libusb20_get_stats_t ugen20_get_stats;
 static libusb20_kernel_driver_active_t ugen20_kernel_driver_active;
 static libusb20_detach_kernel_driver_t ugen20_detach_kernel_driver;
+static libusb20_attach_kernel_driver_t ugen20_attach_kernel_driver;
 static libusb20_do_request_sync_t ugen20_do_request_sync;
 static libusb20_process_t ugen20_process;
 
@@ -95,6 +96,49 @@ static libusb20_tr_cancel_async_t ugen20_tr_cancel_async;
 static const struct libusb20_device_methods libusb20_ugen20_device_methods = {
 	LIBUSB20_DEVICE(LIBUSB20_DECLARE, ugen20)
 };
+
+static int
+errno_to_libusb_error(int uerr)
+{
+	switch (uerr) {
+	case 0:
+		return (LIBUSB20_SUCCESS);
+	case EIO:
+	case ERANGE:
+		return (LIBUSB20_ERROR_IO);
+	case EINVAL:
+	case EFAULT:
+	case ENOBUFS:
+		return (LIBUSB20_ERROR_INVALID_PARAM);
+	case EACCES:
+	case EPERM:
+		return (LIBUSB20_ERROR_ACCESS);
+	case ENXIO:
+	case ENODEV:
+		return (LIBUSB20_ERROR_NO_DEVICE);
+	case ENOENT:
+		return (LIBUSB20_ERROR_NOT_FOUND);
+	case EBUSY:
+	case EALREADY:
+	case EADDRINUSE:
+		return (LIBUSB20_ERROR_BUSY);
+	case ETIMEDOUT:
+		return (LIBUSB20_ERROR_TIMEOUT);
+	case EMSGSIZE:
+		return (LIBUSB20_ERROR_OVERFLOW);
+	case EPIPE:
+		return (LIBUSB20_ERROR_PIPE);
+	case EINTR:
+	case ECANCELED:
+		return (LIBUSB20_ERROR_INTERRUPTED);
+	case ENOMEM:
+		return (LIBUSB20_ERROR_NO_MEM);
+	case ENOTSUP:
+		return (LIBUSB20_ERROR_NOT_SUPPORTED);
+	default:
+		return (LIBUSB20_ERROR_OTHER);
+	}
+}
 
 static const char *
 ugen20_get_backend_name(void)
@@ -717,6 +761,17 @@ ugen20_detach_kernel_driver(struct libusb20_device *pdev,
 }
 
 static int
+ugen20_attach_kernel_driver(struct libusb20_device *pdev, uint8_t iface_index)
+{
+	int temp = iface_index;
+
+	if (ioctl(pdev->file_ctrl, IOUSB(USB_IFACE_DRIVER_ATTACH), &temp)) {
+		return (LIBUSB20_ERROR_OTHER);
+	}
+	return (0);			/* kernel driver is attached */
+}
+
+static int
 ugen20_do_request_sync(struct libusb20_device *pdev,
     struct LIBUSB20_CONTROL_SETUP_DECODED *setup,
     void *data, uint16_t *pactlen, uint32_t timeout, uint8_t flags)
@@ -734,7 +789,7 @@ ugen20_do_request_sync(struct libusb20_device *pdev,
 		/* ignore */
 	}
 	if (ioctl(pdev->file_ctrl, IOUSB(USB_DO_REQUEST), &req)) {
-		return (LIBUSB20_ERROR_OTHER);
+		return (errno_to_libusb_error(errno));
 	}
 	if (pactlen) {
 		/* get actual length */
@@ -753,7 +808,16 @@ ugen20_process(struct libusb20_device *pdev)
 	while (1) {
 
 	  if (ioctl(pdev->file, IOUSB(USB_FS_COMPLETE), &temp)) {
-			if (errno == EBUSY) {
+			if (errno == EBUSY || errno == EINVAL) {
+				/*
+				 * EBUSY: no completion is pending.
+				 * EINVAL: a dequeued completion referenced an
+				 * endpoint that no longer exists, e.g. a stale
+				 * completion left over after a SET_INTERFACE /
+				 * SET_CONFIG tore the endpoints down. This is not
+				 * a device detach, so stop draining rather than
+				 * declaring the device gone.
+				 */
 				break;
 			} else {
 				/* device detached */

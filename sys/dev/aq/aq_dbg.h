@@ -88,15 +88,15 @@ Debug levels:
 #define AQ_DBG_DUMP_DESC(desc)
 #endif
 
-typedef enum aq_debug_level
+enum aq_debug_level
 {
 	lvl_error = LOG_ERR,
 	lvl_warn = LOG_WARNING,
 	lvl_trace = LOG_NOTICE,
 	lvl_detail = LOG_INFO,
-} aq_debug_level;
+};
 
-typedef enum aq_debug_category
+enum aq_debug_category
 {
 	dbg_init    = 1,
 	dbg_config  = 1 << 1,
@@ -104,35 +104,29 @@ typedef enum aq_debug_category
 	dbg_rx      = 1 << 3,
 	dbg_intr    = 1 << 4,
 	dbg_fw      = 1 << 5,
-} aq_debug_category;
+};
 
 
 #define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
 
-extern const aq_debug_level dbg_level_;
-extern const uint32_t dbg_categories_;
+extern int aq_dbg_level;
+extern uint32_t aq_dbg_categories;
 
-#define log_base_(_lvl, _fmt, args...) printf( "atlantic: " _fmt "\n", ##args)
+#define aq_log_base(_lvl, _fmt, args...) do { if (aq_dbg_level >= (_lvl)) printf( "atlantic: " _fmt "\n", ##args); } while (0)
 
-#if AQ_CFG_DEBUG_LVL > 0
-#define trace_base_(_lvl, _cat, _fmt, args...) do { if (dbg_level_ >= _lvl && (_cat & dbg_categories_)) { printf( "atlantic: " _fmt " @%s,%d\n", ##args, __FILENAME__, __LINE__); }} while (0)
-#else
-#define trace_base_(_lvl, _cat, _fmt, ...) do {} while (0)
-#endif // AQ_CFG_DEBUG_LVL > 0
+#define aq_trace_base(_lvl, _cat, _fmt, args...) do { if (aq_dbg_level >= (_lvl) && ((_cat) & aq_dbg_categories)) { printf( "atlantic: " _fmt " @%s,%d\n", ##args, __FILENAME__, __LINE__); }} while (0)
 
-#define aq_log_error(_fmt, args...)    log_base_(lvl_error, "[!] " _fmt, ##args)
-#define aq_log_warn(_fmt, args...)     log_base_(lvl_warn, "/!\\ " _fmt, ##args)
-#define aq_log(_fmt, args...)          log_base_(lvl_trace, _fmt, ##args)
-#define aq_log_detail(_fmt, args...)   log_base_(lvl_detail, _fmt, ##args)
+#define aq_log_warn(_fmt, args...)     aq_log_base(lvl_warn, "/!\\ " _fmt, ##args)
+#define aq_log(_fmt, args...)          aq_log_base(lvl_trace, _fmt, ##args)
+#define aq_log_detail(_fmt, args...)   aq_log_base(lvl_detail, _fmt, ##args)
 
-#define trace_error(_cat,_fmt, args...)   trace_base_(lvl_error, _cat, "[!] " _fmt, ##args)
-#define trace_warn(_cat, _fmt, args...)   trace_base_(lvl_warn, _cat, "/!\\ " _fmt, ##args)
-#define trace(_cat, _fmt, args...)   trace_base_(lvl_trace, _cat, _fmt, ##args)
-#define trace_detail(_cat, _fmt, args...)   trace_base_(lvl_detail, _cat, _fmt, ##args)
+#define trace_error(_cat,_fmt, args...)   aq_trace_base(lvl_error, _cat, "[!] " _fmt, ##args)
+#define trace_warn(_cat, _fmt, args...)   aq_trace_base(lvl_warn, _cat, "/!\\ " _fmt, ##args)
+#define trace(_cat, _fmt, args...)   aq_trace_base(lvl_trace, _cat, _fmt, ##args)
+#define trace_detail(_cat, _fmt, args...)   aq_trace_base(lvl_detail, _cat, _fmt, ##args)
 
 void trace_aq_tx_descr(int ring_idx, unsigned int pointer, volatile uint64_t descr[2]);
 void trace_aq_rx_descr(int ring_idx, unsigned int pointer, volatile uint64_t descr[2]);
 void trace_aq_tx_context_descr(int ring_idx, unsigned int pointer, volatile uint64_t descr[2]);
-void DumpHex(const void* data, size_t size);
 
 #endif // AQ_DBG_H

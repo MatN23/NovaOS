@@ -37,6 +37,9 @@
 #include "acpi.h"
 #include "atkbdc.h"
 #include "bhyverun.h"
+#ifdef BHYVE_SNAPSHOT
+#include "snapshot.h"
+#endif
 #include "bootrom.h"
 #include "config.h"
 #include "debug.h"
@@ -65,6 +68,9 @@ bhyve_init_config(void)
 	set_config_bool("x86.strictmsr", true);
 	set_config_bool("x86.verbosemsr", false);
 	set_config_value("lpc.fwcfg", "bhyve");
+#ifdef BHYVE_SNAPSHOT
+	set_config_value("rundir", BHYVE_RUN_DIR);
+#endif
 }
 
 void
@@ -78,7 +84,8 @@ bhyve_usage(int code)
 	    "Usage: %s [-aCDeHhPSuWwxY]\n"
 	    "       %*s [-c [[cpus=]numcpus][,sockets=n][,cores=n][,threads=n]]\n"
 	    "       %*s [-G port] [-k config_file] [-l lpc] [-m mem] [-o var=value]\n"
-	    "       %*s [-p vcpu:hostcpu] [-r file] [-s pci] [-U uuid] vmname\n"
+	    "       %*s [-p vcpuN[-vcpuM]]:hostcpuX[-hostcpuY]\n"
+	    "       %*s [-r file] [-s pci] [-U uuid] vmname\n"
 	    "       -a: local apic is in xAPIC mode (deprecated)\n"
 	    "       -C: include guest memory in core file\n"
 	    "       -c: number of CPUs and/or topology specification\n"
@@ -108,7 +115,7 @@ bhyve_usage(int code)
 	    "       -x: local APIC is in x2APIC mode\n"
 	    "       -Y: disable MPtable generation\n",
 	    progname, (int)strlen(progname), "", (int)strlen(progname), "",
-	    (int)strlen(progname), "");
+	    (int)strlen(progname), "", (int)strlen(progname), "");
 	exit(code);
 }
 

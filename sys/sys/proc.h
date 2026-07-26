@@ -504,6 +504,7 @@ enum {
 	TDA_MOD3,		/* .. and after */
 	TDA_MOD4,
 	TDA_SCHED_PRIV,
+	TDA_ASYNC_EXIT,
 	TDA_MAX,
 };
 #define	TDAI(tda)		(1U << (tda))
@@ -530,6 +531,7 @@ enum {
 #define	TDB_BOUNDARY	0x00008000 /* ptracestop() at boundary */
 #define	TDB_COREDUMPREQ	0x00010000 /* Coredump request */
 #define	TDB_SCREMOTEREQ	0x00020000 /* Remote syscall request */
+#define	TDB_SET_SC_RET	0x00040000 /* PT_SET_SC_RET applied */
 
 /*
  * "Private" flags kept in td_pflags:
@@ -723,6 +725,7 @@ struct proc {
 	int		p_pendingexits; /* (c) Count of pending thread exits. */
 	struct filemon	*p_filemon;	/* (c) filemon-specific data. */
 	int		p_pdeathsig;	/* (c) Signal from parent on exit. */
+	u_int		p_execblock;	/* (c) Blockers for execve. */
 /* End area that is zeroed on creation. */
 #define	p_endzero	p_magic
 
@@ -777,6 +780,8 @@ struct proc {
 
 	TAILQ_HEAD(, kq_timer_cb_data)	p_kqtim_stop;	/* (c) */
 	LIST_ENTRY(proc) p_jaillist;	/* (d) Jail process linkage. */
+	u_int		p_asig;		/* (c) ASYNCEXIT pending signal. */
+	u_int		p_tree_refcnt;	/* (e) proctree refcount */
 };
 
 #define	p_session	p_pgrp->pg_session
@@ -801,6 +806,12 @@ struct proc {
 #define	PROC_PROFLOCK(p)	mtx_lock_spin(&(p)->p_profmtx)
 #define	PROC_PROFUNLOCK(p)	mtx_unlock_spin(&(p)->p_profmtx)
 #define	PROC_PROFLOCK_ASSERT(p, type)	mtx_assert(&(p)->p_profmtx, (type))
+
+#define	PROC_TREE_REF(p)	refcount_acquire(&(p)->p_tree_refcnt)
+#define	PROC_TREE_UNREF(p)	do {					\
+	if (refcount_release(&(p)->p_tree_refcnt))			\
+		uma_zfree(proc_zone, p);				\
+} while (0)
 
 /* These flags are kept in p_flag. */
 #define	P_ADVLOCK	0x00000001	/* Process may hold a POSIX advisory
@@ -842,8 +853,8 @@ struct proc {
 #define	P_INEXEC	0x04000000	/* Process is in execve(). */
 #define	P_STATCHILD	0x08000000	/* Child process stopped or exited. */
 #define	P_INMEM		0x10000000	/* Loaded into memory, always set. */
-#define	P_UNUSED1	0x20000000	/* --available-- */
-#define	P_UNUSED2	0x40000000	/* --available-- */
+#define	P_ASYNC_EXIT	0x20000000	/* XXX */
+#define	P_INEXEC_WAIT	0x40000000	/* Waiters for P_INEXEC/p_execblock */
 #define	P_PPTRACE	0x80000000	/* PT_TRACEME by vforked child. */
 
 #define	P_STOPPED	(P_STOPPED_SIG|P_STOPPED_SINGLE|P_STOPPED_TRACE)
@@ -889,10 +900,8 @@ struct proc {
 						   sync core registered */
 #define	P2_MEMBAR_GLOBE		0x00400000	/* membar global expedited
 						   registered */
-
 #define	P2_LOGSIGEXIT_ENABLE	0x00800000	/* Disable logging on sigexit */
 #define	P2_LOGSIGEXIT_CTL	0x01000000	/* Override kern.logsigexit */
-
 #define	P2_HWT			0x02000000	/* Process is using HWT. */
 
 /* Flags protected by proctree_lock, kept in p_treeflags. */

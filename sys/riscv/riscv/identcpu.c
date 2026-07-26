@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2015-2016 Ruslan Bukin <br@bsdpad.com>
+ * Copyright (c) 2015-2026 Ruslan Bukin <br@bsdpad.com>
  * All rights reserved.
  * Copyright (c) 2022 Mitchell Horne <mhorne@FreeBSD.org>
  * Copyright (c) 2023 The FreeBSD Foundation
@@ -75,6 +75,7 @@ u_int mmu_caps;
 
 /* Supervisor-mode extension support. */
 bool has_hyp;
+bool has_vector;
 bool __read_frequently has_sstc;
 bool __read_frequently has_sscofpmf;
 bool has_svpbmt;
@@ -130,6 +131,11 @@ static const struct marchid_entry sifive_marchids[] = {
 	MARCHID_END
 };
 
+static const struct marchid_entry spacemit_marchids[] = {
+	{ MARCHID_SPACEMIT_K1,	"SpacemiT(R) X60" },
+	MARCHID_END
+};
+
 /*
  * Known CPU vendor/manufacturer table.
  */
@@ -141,6 +147,7 @@ static const struct {
 	{ MVENDORID_UNIMPL,	"Unspecified",		NULL		},
 	{ MVENDORID_SIFIVE,	"SiFive",		sifive_marchids	},
 	{ MVENDORID_THEAD,	"T-Head",		NULL		},
+	{ MVENDORID_SPACEMIT,	"SpacemiT",		spacemit_marchids	},
 };
 
 /*
@@ -280,6 +287,7 @@ parse_riscv_isa(struct cpu_desc *desc, char *isa, int len)
 		case 'h':
 		case 'i':
 		case 'm':
+		case 'v':
 			desc->isa_extensions |= HWCAP_ISA_BIT(isa[i]);
 			i++;
 			break;
@@ -402,6 +410,9 @@ identify_cpu_features_fdt(u_int cpu, struct cpu_desc *desc)
 			return;
 		}
 
+		if (bootverbose)
+			printf("hart %d isa: %s\n", hart, isa);
+
 		/*
 		 * The string is specified to be lowercase, but let's be
 		 * certain.
@@ -462,6 +473,7 @@ update_global_capabilities(u_int cpu, struct cpu_desc *desc)
 	UPDATE_CAP(mmu_caps, desc->mmu_caps);
 
 	/* Supervisor-mode extension support. */
+	UPDATE_CAP(has_vector, (desc->isa_extensions & HWCAP_ISA_V) != 0);
 	UPDATE_CAP(has_hyp, (desc->isa_extensions & HWCAP_ISA_H) != 0);
 	UPDATE_CAP(has_sstc, (desc->smode_extensions & SV_SSTC) != 0);
 	UPDATE_CAP(has_sscofpmf, (desc->smode_extensions & SV_SSCOFPMF) != 0);
@@ -605,7 +617,8 @@ printcpuinfo(u_int cpu)
 		    "\04Double"
 		    "\06Float"
 		    "\10Hypervisor"
-		    "\15Mult/Div");
+		    "\15Mult/Div"
+		    "\26Vector");
 	}
 
 	if (SHOULD_PRINT(smode_extensions)) {

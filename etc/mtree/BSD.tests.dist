@@ -292,14 +292,6 @@
     ..
     games
     ..
-    gnu
-        lib
-        ..
-        usr.bin
-            diff
-            ..
-        ..
-    ..
     include
     ..
     lib
@@ -834,6 +826,8 @@
         fs
             fusefs
             ..
+            pjdfstest
+            ..
             tarfs
             ..
             tmpfs
@@ -976,6 +970,8 @@
             ..
             utimensat
             ..
+        ..
+        pmc
         ..
         posixshm
         ..

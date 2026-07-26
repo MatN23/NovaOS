@@ -42,8 +42,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 #include <net/ethernet.h>
 #include <net/if.h>
-#include <net/if_dl.h>
-#include <net/if_media.h>
 #include <net/if_var.h>
 #include <net/iflib.h>
 
@@ -55,15 +53,20 @@ __FBSDID("$FreeBSD$");
 #include "aq_hw_llh.h"
 
 int
-aq_update_hw_stats(aq_dev_t *aq_dev)
+aq_update_hw_stats(struct aq_dev *aq_dev)
 {
 	struct aq_hw *hw = &aq_dev->hw;
-	struct aq_hw_fw_mbox mbox;
+	struct aq_hw_stats stats;
 
-	aq_hw_mpi_read_stats(hw, &mbox);
+	memset(&stats, 0, sizeof(stats));
+	if (aq_hw_mpi_read_stats(hw, &stats) != 0)
+		return (0);
 
-#define AQ_SDELTA(_N_) (aq_dev->curr_stats._N_ += \
-    mbox.stats._N_ - aq_dev->last_stats._N_)
+#define AQ_SDELTA(_N_) do { \
+	int32_t _d = (int32_t)(stats._N_ - aq_dev->last_stats._N_); \
+	if (_d > 0) \
+		aq_dev->curr_stats._N_ += _d; \
+} while (0)
 	if (aq_dev->linkup) {
 		AQ_SDELTA(uprc);
 		AQ_SDELTA(mprc);
@@ -88,15 +91,25 @@ aq_update_hw_stats(aq_dev_t *aq_dev)
 
 		AQ_SDELTA(dpc);
 
-		aq_dev->curr_stats.brc = aq_dev->curr_stats.ubrc +
-		    aq_dev->curr_stats.mbrc + aq_dev->curr_stats.bbrc;
-		aq_dev->curr_stats.btc = aq_dev->curr_stats.ubtc +
-		    aq_dev->curr_stats.mbtc + aq_dev->curr_stats.bbtc;
+		/*
+		 * Per-cast octets present: derive the aggregate from them.
+		 * Otherwise (B0) accumulate the firmware-reported aggregate.
+		 */
+		if (stats.ubrc | stats.mbrc | stats.bbrc)
+			aq_dev->curr_stats.brc = aq_dev->curr_stats.ubrc +
+			    aq_dev->curr_stats.mbrc + aq_dev->curr_stats.bbrc;
+		else
+			AQ_SDELTA(brc);
 
+		if (stats.ubtc | stats.mbtc | stats.bbtc)
+			aq_dev->curr_stats.btc = aq_dev->curr_stats.ubtc +
+			    aq_dev->curr_stats.mbtc + aq_dev->curr_stats.bbtc;
+		else
+			AQ_SDELTA(btc);
 	}
 #undef AQ_SDELTA
 
-	memcpy(&aq_dev->last_stats, &mbox.stats, sizeof(mbox.stats));
+	memcpy(&aq_dev->last_stats, &stats, sizeof(stats));
 
 	return (0);
 }
@@ -105,29 +118,18 @@ aq_update_hw_stats(aq_dev_t *aq_dev)
 void
 aq_if_update_admin_status(if_ctx_t ctx)
 {
-	aq_dev_t *aq_dev = iflib_get_softc(ctx);
+	struct aq_dev *aq_dev = iflib_get_softc(ctx);
 	struct aq_hw *hw = &aq_dev->hw;
 	uint32_t link_speed;
 
-	//	AQ_DBG_ENTER();
 
 	struct aq_hw_fc_info fc_neg;
 	aq_hw_get_link_state(hw, &link_speed, &fc_neg);
-//	AQ_DBG_PRINT(" link_speed=%d aq_dev->linkup=%d", link_speed, aq_dev->linkup);
 	if (link_speed && !aq_dev->linkup) { /* link was DOWN */
 		device_printf(aq_dev->dev, "atlantic: link UP: speed=%d\n", link_speed);
 
 		aq_dev->linkup = 1;
 
-#if __FreeBSD__ >= 12
-		/* Disable TSO if link speed < 1G */
-		if (link_speed < 1000 && (iflib_get_softc_ctx(ctx)->isc_capabilities & (IFCAP_TSO4 | IFCAP_TSO6))) {
-		    iflib_get_softc_ctx(ctx)->isc_capabilities &= ~(IFCAP_TSO4 | IFCAP_TSO6);
-		    device_printf(aq_dev->dev, "atlantic: TSO disabled for link speed < 1G");
-		}else{
-		    iflib_get_softc_ctx(ctx)->isc_capabilities |= (IFCAP_TSO4 | IFCAP_TSO6);
-		}
-#endif
 		/* turn on/off RX Pause in RPB */
 		rpb_rx_xoff_en_per_tc_set(hw, fc_neg.fc_rx, 0);
 
@@ -150,7 +152,6 @@ aq_if_update_admin_status(if_ctx_t ctx)
 	}
 
 	aq_update_hw_stats(aq_dev);
-//	AQ_DBG_EXIT(0);
 }
 
 /**************************************************************************/
@@ -163,9 +164,9 @@ aq_isr_rx(void *arg)
 	struct aq_dev   *aq_dev = ring->dev;
 	struct aq_hw    *hw = &aq_dev->hw;
 
-	/* clear interrupt status */
 	itr_irq_status_clearlsw_set(hw, BIT(ring->msix));
-	ring->stats.irq++;
+	AQ_HW_FLUSH(hw);
+	counter_u64_add(ring->stats.irq, 1);
 	return (FILTER_SCHEDULE_THREAD);
 }
 
@@ -175,11 +176,11 @@ aq_isr_rx(void *arg)
 int
 aq_linkstat_isr(void *arg)
 {
-	aq_dev_t              *aq_dev = arg;
+	struct aq_dev              *aq_dev = arg;
 	struct aq_hw          *hw = &aq_dev->hw;
 
-	/* clear interrupt status */
-	itr_irq_status_clearlsw_set(hw, aq_dev->msix);
+	itr_irq_status_clearlsw_set(hw, BIT(aq_dev->msix));
+	AQ_HW_FLUSH(hw);
 
 	iflib_admin_intr_deferred(aq_dev->ctx);
 

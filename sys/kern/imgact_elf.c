@@ -84,8 +84,6 @@
 #define ELF_NOTE_ROUNDSIZE	4
 #define OLD_EI_BRAND	8
 
-#define	ELF_OFFPAGE_PHNUM	128
-
 /*
  * ELF_ABI_NAME is a string name of the ELF ABI.  ELF_ABI_ID is used
  * to build variable names.
@@ -96,7 +94,7 @@
 static int __elfN(check_header)(const Elf_Ehdr *hdr);
 static const Elf_Brandinfo *__elfN(get_brandinfo)(struct image_params *imgp,
     const Elf_Phdr *phdr, const char *interp, int32_t *osrel, uint32_t *fctl0);
-static int __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
+static int __elfN(load_interp_file)(struct thread *td, const char *file, u_long *addr,
     u_long *entry);
 static int __elfN(load_section)(const struct image_params *imgp,
     vm_ooffset_t offset, caddr_t vmaddr, size_t memsz, size_t filsz,
@@ -228,6 +226,11 @@ static bool __elfN(allow_wx) = true;
 SYSCTL_BOOL(ELF_NODE_OID, OID_AUTO, allow_wx,
     CTLFLAG_RWTUN, &__elfN(allow_wx), 0,
     "Allow pages to be mapped simultaneously writable and executable");
+
+static u_int __elfN(phnums) = 128;
+SYSCTL_UINT(ELF_NODE_OID, OID_AUTO, phnums,
+    CTLFLAG_RWTUN, &__elfN(phnums), 0,
+    "Max number of program headers to accept");
 
 static const Elf_Brandinfo *elf_brand_list[MAX_BRANDS];
 
@@ -782,7 +785,7 @@ __elfN(load_sections)(const struct image_params *imgp, const Elf_Ehdr *hdr,
  * the entry point for the loaded file.
  */
 static int
-__elfN(load_file)(struct thread *td, const char *file, u_long *addr,
+__elfN(load_interp_file)(struct thread *td, const char *file, u_long *addr,
     u_long *entry)
 {
 	struct {
@@ -820,6 +823,7 @@ __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
 	imgp->td = td;
 	imgp->proc = td->td_proc;
 	imgp->attr = attr;
+	imgp->interpreted = IMGACT_INTERP_ELF; /* ignored by do_execve */
 
 	NDINIT(nd, LOOKUP, ISOPEN | FOLLOW | LOCKSHARED | LOCKLEAF,
 	    UIO_SYSSPACE, file);
@@ -855,17 +859,14 @@ __elfN(load_file)(struct thread *td, const char *file, u_long *addr,
 		goto fail;
 	}
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
+	if (hdr->e_phnum > __elfN(phnums)) {
 		error = ENOEXEC;
 		goto fail;
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
 		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
-		if (hdr->e_phnum > ELF_OFFPAGE_PHNUM) {
-			error = ENOEXEC;
-			goto fail;
-		}
 		VOP_UNLOCK(imgp->vp);
 		phdr = m_phdrs = malloc(hdr->e_phnum * sizeof(Elf_Phdr),
 		    M_TEMP, M_WAITOK | M_ZERO);
@@ -1092,13 +1093,13 @@ __elfN(load_interp)(struct image_params *imgp, const Elf_Brandinfo *brand_info,
 	if (brand_info->interp_newpath != NULL &&
 	    (brand_info->interp_path == NULL ||
 	    strcmp(interp, brand_info->interp_path) == 0)) {
-		error = __elfN(load_file)(imgp->td,
+		error = __elfN(load_interp_file)(imgp->td,
 		    brand_info->interp_newpath, addr, entry);
 		if (error == 0)
 			return (0);
 	}
 
-	error = __elfN(load_file)(imgp->td, interp, addr, entry);
+	error = __elfN(load_interp_file)(imgp->td, interp, addr, entry);
 	if (error == 0)
 		return (0);
 
@@ -1157,19 +1158,18 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 	free_interp = false;
 	m_phdrs = NULL;
 
-	if (!aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
-		uprintf("Unaligned program headers\n");
-		return (ENOEXEC);
-	}
 	if (hdr->e_phoff + hdr->e_phnum * hdr->e_phentsize < hdr->e_phoff) {
 		uprintf("PHDRS wrap\n");
 		return (ENOEXEC);
 	}
-	if (__elfN(phdr_in_zero_page)(hdr)) {
-		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
-	} else if (hdr->e_phnum > ELF_OFFPAGE_PHNUM) {
-		uprintf("Too many program headers\n");
+	if (hdr->e_phnum > __elfN(phnums)) {
+		uprintf("Too many program headers (%u, %u max)\n",
+		    hdr->e_phnum, __elfN(phnums));
 		return (ENOEXEC);
+	}
+	if (__elfN(phdr_in_zero_page)(hdr) &&
+	    aligned(imgp->image_header + hdr->e_phoff, Elf_Addr)) {
+		phdr = (const Elf_Phdr *)(imgp->image_header + hdr->e_phoff);
 	} else {
 		VOP_UNLOCK(imgp->vp);
 		phdr = m_phdrs = malloc(hdr->e_phnum * sizeof(Elf_Phdr),
@@ -1270,11 +1270,39 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 		error = ENOEXEC;
 		goto ret;
 	}
+
+	/*
+	 * Avoid a possible deadlock if the current address space is destroyed
+	 * and that address space maps the locked vnode.  In the common case,
+	 * the locked vnode's v_usecount is decremented but remains greater
+	 * than zero.  Consequently, the vnode lock is not needed by vrele().
+	 * However, in cases where the vnode lock is external, such as nullfs,
+	 * v_usecount may become zero.
+	 *
+	 * The VV_TEXT flag prevents modifications to the executable while
+	 * the vnode is unlocked.
+	 */
+	VOP_UNLOCK(imgp->vp);
+
+	/*
+	 * Decide whether to enable randomization of user mappings.  First,
+	 * reset user preferences for the setid binaries.  Then, account for the
+	 * support of randomization by the ABI, by user preferences, and make
+	 * special treatment for PIE binaries.
+	 */
+	if (imgp->credential_setid) {
+		PROC_LOCK(imgp->proc);
+		imgp->proc->p_flag2 &= ~(P2_ASLR_ENABLE | P2_ASLR_DISABLE |
+		    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC);
+		PROC_UNLOCK(imgp->proc);
+	}
+
 	sv = brand_info->sysvec;
 	if (hdr->e_type == ET_DYN) {
 		if ((brand_info->flags & BI_CAN_EXEC_DYN) == 0) {
 			uprintf("Cannot execute shared object\n");
 			error = ENOEXEC;
+			(void)vn_lock(imgp->vp, LK_SHARED | LK_RETRY);
 			goto ret;
 		}
 		/*
@@ -1292,33 +1320,6 @@ __CONCAT(exec_, __elfN(imgact))(struct image_params *imgp)
 			else
 				imgp->et_dyn_addr = __elfN(pie_base);
 		}
-	}
-
-	/*
-	 * Avoid a possible deadlock if the current address space is destroyed
-	 * and that address space maps the locked vnode.  In the common case,
-	 * the locked vnode's v_usecount is decremented but remains greater
-	 * than zero.  Consequently, the vnode lock is not needed by vrele().
-	 * However, in cases where the vnode lock is external, such as nullfs,
-	 * v_usecount may become zero.
-	 *
-	 * The VV_TEXT flag prevents modifications to the executable while
-	 * the vnode is unlocked.
-	 */
-	VOP_UNLOCK(imgp->vp);
-
-	/*
-	 * Decide whether to enable randomization of user mappings.
-	 * First, reset user preferences for the setid binaries.
-	 * Then, account for the support of the randomization by the
-	 * ABI, by user preferences, and make special treatment for
-	 * PIE binaries.
-	 */
-	if (imgp->credential_setid) {
-		PROC_LOCK(imgp->proc);
-		imgp->proc->p_flag2 &= ~(P2_ASLR_ENABLE | P2_ASLR_DISABLE |
-		    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC);
-		PROC_UNLOCK(imgp->proc);
 	}
 	if ((sv->sv_flags & SV_ASLR) == 0 ||
 	    (imgp->proc->p_flag2 & P2_ASLR_DISABLE) != 0 ||
