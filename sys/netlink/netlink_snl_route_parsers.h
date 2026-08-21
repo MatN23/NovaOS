@@ -93,28 +93,26 @@ SNL_DECLARE_PARSER_EXT(_mpath_nh_parser, sizeof(struct rtnexthop),
 		sizeof(struct rta_mpath_nh), _fp_p_mp_nh, _nla_p_mp_nh,
 		_cb_p_mp_nh);
 
-struct rta_mpath {
-	uint32_t num_nhops;
-	struct rta_mpath_nh **nhops;
-};
-
 static bool
 nlattr_get_multipath(struct snl_state *ss, struct nlattr *nla,
     const void *arg __unused, void *target)
 {
+	struct snl_parray *mpath = target;
 	uint32_t start_size = 4;
 
 	while (start_size < NLA_DATA_LEN(nla) / sizeof(struct rtnexthop))
 		start_size *= 2;
 
-	return (snl_attr_get_parray_sz(ss, nla, start_size, &_mpath_nh_parser, target));
+	return (snl_attr_get_parray_sz(ss, nla, start_size,
+	    &_mpath_nh_parser, mpath));
 }
 
 struct snl_parsed_route {
 	struct sockaddr		*rta_dst;
 	struct sockaddr		*rta_gw;
+	struct sockaddr		*rta_pref_src;
 	struct nlattr		*rta_metrics;
-	struct rta_mpath	rta_multipath;
+	struct snl_parray	rta_multipath;
 	uint32_t		rta_oif;
 	uint32_t		rta_expire;
 	uint32_t		rta_table;
@@ -142,6 +140,7 @@ static const struct snl_attr_parser _nla_p_route[] = {
 	{ .type = NL_RTA_OIF, .off = _OUT(rta_oif), .cb = snl_attr_get_uint32 },
 	{ .type = NL_RTA_GATEWAY, .off = _OUT(rta_gw), .cb = snl_attr_get_ip },
 	{ .type = NL_RTA_PRIORITY, .off = _OUT(rta_metric), .cb = snl_attr_get_uint32 },
+	{ .type = NL_RTA_PREFSRC, .off = _OUT(rta_pref_src), .cb = snl_attr_get_ip },
 	{ .type = NL_RTA_METRICS, .arg = &_metrics_parser, .cb = snl_attr_get_nested },
 	{ .type = NL_RTA_MULTIPATH, .off = _OUT(rta_multipath), .cb = nlattr_get_multipath },
 	{ .type = NL_RTA_KNH_ID, .off = _OUT(rta_knh_id), .cb = snl_attr_get_uint32 },

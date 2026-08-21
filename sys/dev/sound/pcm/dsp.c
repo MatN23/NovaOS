@@ -146,9 +146,9 @@ dsp_make_dev(device_t dev)
 	devargs.mda_si_drv1 = sc;
 	err = make_dev_s(&devargs, &sc->dsp_dev, "dsp%d", unit);
 	if (err != 0) {
-		device_printf(dev, "failed to create dsp%d: error %d",
+		device_printf(dev, "failed to create dsp%d: error %d\n",
 		    unit, err);
-		return (ENXIO);
+		return (err);
 	}
 
 	return (0);
@@ -536,7 +536,7 @@ dsp_write(struct cdev *i_dev, struct uio *buf, int flag)
 
 static int
 dsp_ioctl_channel(struct dsp_cdevpriv *priv, struct pcm_channel *ch,
-    u_long cmd, caddr_t arg)
+    unsigned long cmd, caddr_t arg)
 {
 	struct snddev_info *d;
 	struct pcm_channel *rdch, *wrch;
@@ -690,13 +690,13 @@ typedef struct audio_errinfo32
 #endif
 
 static int
-dsp_ioctl(struct cdev *i_dev, u_long cmd, caddr_t arg, int mode,
+dsp_ioctl(struct cdev *i_dev, unsigned long cmd, caddr_t arg, int mode,
     struct thread *td)
 {
 	struct dsp_cdevpriv *priv;
     	struct pcm_channel *chn, *rdch, *wrch;
 	struct snddev_info *d;
-	u_long xcmd;
+	unsigned long xcmd;
 	int *arg_i, ret, tmp, err;
 
 	if ((err = devfs_get_cdevpriv((void **)&priv)) != 0)
@@ -3024,7 +3024,7 @@ dsp_kqevent(struct knote *kn, long hint)
 	 * the reference and fire based on the current amount of ready/free
 	 * data in the buffer, so all knotes see the same live state.
 	 */
-	if (chn_polltrigger(ch, (u_int64_t)kn->kn_sdata)) {
+	if (chn_polltrigger(ch, (uint64_t)kn->kn_sdata)) {
 		if (kn->kn_filter == EVFILT_READ) {
 			kn->kn_data = sndbuf_getready(ch->bufsoft);
 			if (ch->flags & CHN_F_MMAP)
